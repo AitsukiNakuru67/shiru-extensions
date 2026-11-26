@@ -1,6 +1,6 @@
 # shiru-extensions
 
-Standalone extension repository for [Shiru](https://github.com/RockinChaos/Shiru), kept cleanly separate from the core app.
+Standalone structured-list extension repository for [Shiru](https://github.com/RockinChaos/Shiru), kept cleanly separate from the core app.
 
 ## Install in Shiru
 
@@ -9,11 +9,15 @@ Standalone extension repository for [Shiru](https://github.com/RockinChaos/Shiru
    ```text
    gh:AitsukiNakuru67/shiru-extensions
    ```
-3. Enable **Release Index** and open its extension settings (gear icon) to set your **Release Index URL** (HTTPS or `http://localhost:...`).
+3. Enable **Release Matcher** and open its settings (gear icon) to configure either:
+   - **Feed URLs (On-Device):** Comma-separated RSS 2.0, Torznab 1.3, or JSON feed URLs (supports `{query}`, `{anilistId}`, `{malId}`, `{anidbId}`, `{episode}` placeholders). Runs Shiru's full episode matcher, verifier, and ranker locally inside the extension Web Worker.
+   - **Release Index URL (Remote):** Base URL of a compatible release index server (HTTPS or `http://localhost:...`) serving `.list.json` v2.
 
-## Included Extension
+## Building & Syncing Matcher Rules
 
-- **`sources/release-index.js`** (`id: "release-index"`):
-  - Implements Shiru's structured `list(query, { fresh })` contract, returning `.list.json` v2 (with fallback to `.rank.json` / `POST /rank`) so Shiru handles local ordering, sections, crowns, resolution switching, native tracker scraping, and AutoGrab directly on the user's device.
-  - Also implements `single()` / `batch()` / `movie()` for backwards compatibility.
-  - Can be replaced or extended with a fully on-device matcher running inside Shiru's extension Web Worker (`sources/abstract.js` + `index.d.ts`).
+```bash
+pnpm install
+pnpm run sync   # pulls pure-JS matcher core + tables from ../anime-release-index/src/shiru
+pnpm run build  # bundles src/extension.js -> sources/release-index.js (single Worker ESM file)
+pnpm test       # runs end-to-end tests against the built bundle
+```

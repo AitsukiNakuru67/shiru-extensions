@@ -1,9 +1,22 @@
 {
   "name": "@aitsukinakuru67/shiru-extensions",
-  "version": "0.1.0",
-  "description": "Standalone structured-list extensions for Shiru (compatible with the list(query) local-ranking protocol)",
+  "version": "0.2.0",
+  "description": "Standalone structured-list extensions for Shiru (on-device matcher + remote release index via list(query))",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "main": "index.json",
-  "types": "index.d.ts"
+  "types": "index.d.ts",
+  "scripts": {
+    "sync": "node scripts/sync-matcher.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
 }

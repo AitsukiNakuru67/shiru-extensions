@@ -1,8 +1,8 @@
 [
   {
     "id": "release-index",
-    "name": "Release Index",
-    "version": "0.1.0",
+    "name": "Release Matcher",
+    "version": "0.2.0",
     "main": "sources/release-index.js",
     "update": "gh:AitsukiNakuru67/shiru-extensions",
     "type": "torrent",
@@ -15,9 +15,24 @@
         "label": "Release Index URL",
         "default": "",
         "placeholder": "https://your-index.example",
-        "description": "Base URL of a compatible anime release index server (HTTPS or localhost). Supports .list.json local ranking and AutoGrab."
+        "description": "Optional: base URL of a compatible release index server (HTTPS or localhost). Leave blank to run the on-device matcher against Feed URLs below."
+      },
+      {
+        "type": "text",
+        "key": "feedUrls",
+        "label": "Feed URLs (On-Device)",
+        "default": "",
+        "placeholder": "https://feed.example/api?t=tvsearch&q={query}",
+        "description": "Comma-separated RSS 2.0, Torznab 1.3, or JSON feed URLs queried live on your device. Supports {query}, {anilistId}, {malId}, {anidbId}, and {episode} placeholders."
+      },
+      {
+        "type": "toggle",
+        "key": "useAnizip",
+        "label": "Fetch AniZip mappings",
+        "default": true,
+        "description": "Fetch and cache AniList-to-AniDB/TVDB episode mappings locally for more accurate season and episode matching."
       }
     ],
-    "description": "Connects Shiru to a compatible release index server via the structured list(query) protocol for full local ranking, sections, crowns, and AutoGrab."
+    "description": "Runs Shiru's full episode matcher, verifier, and ranker locally inside the extension worker (from your configured RSS/Torznab/JSON feeds) or connects to a compatible Release Index URL."
   }
 ]
