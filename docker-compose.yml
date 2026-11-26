@@ -1,0 +1,25 @@
+services:
+  local-index:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8787"
+      DATA_DIR: "/data"
+      # Configure one or more RSS 2.0 / Torznab 1.3 / JSON feed URL templates:
+      FEED_URLS: "${FEED_URLS:-}"
+      # Optional: pre-build episodes for your AniList Watching list automatically:
+      ANILIST_USER: "${ANILIST_USER:-}"
+      WATCH_ANILIST_IDS: "${WATCH_ANILIST_IDS:-}"
+      PREBUILD_AIRING: "${PREBUILD_AIRING:-1}"
+      PREBUILD_LIMIT: "${PREBUILD_LIMIT:-25}"
+      REFRESH_MINUTES: "${REFRESH_MINUTES:-15}"
+      SITE_NAME: "${SITE_NAME:-My Local Pre-Built Index}"
+      SITE_TRACKERS: "${SITE_TRACKERS:-}"
+    volumes:
+      - local-index-data:/data
+
+volumes:
+  local-index-data:

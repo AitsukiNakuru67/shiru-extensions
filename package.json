@@ -9,6 +9,7 @@
   "scripts": {
     "sync": "node scripts/sync-matcher.mjs",
     "build": "node scripts/build.mjs",
+    "serve": "node server/local-index.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
