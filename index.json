@@ -1,0 +1,23 @@
+[
+  {
+    "id": "release-index",
+    "name": "Release Index",
+    "version": "0.1.0",
+    "main": "sources/release-index.js",
+    "update": "gh:AitsukiNakuru67/shiru-extensions",
+    "type": "torrent",
+    "speed": "fast",
+    "accuracy": "high",
+    "settings": [
+      {
+        "type": "text",
+        "key": "indexUrl",
+        "label": "Release Index URL",
+        "default": "",
+        "placeholder": "https://your-index.example",
+        "description": "Base URL of a compatible anime release index server (HTTPS or localhost). Supports .list.json local ranking and AutoGrab."
+      }
+    ],
+    "description": "Connects Shiru to a compatible release index server via the structured list(query) protocol for full local ranking, sections, crowns, and AutoGrab."
+  }
+]

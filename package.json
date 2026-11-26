@@ -1,0 +1,9 @@
+{
+  "name": "@aitsukinakuru67/shiru-extensions",
+  "version": "0.1.0",
+  "description": "Standalone structured-list extensions for Shiru (compatible with the list(query) local-ranking protocol)",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "index.json",
+  "types": "index.d.ts"
+}
