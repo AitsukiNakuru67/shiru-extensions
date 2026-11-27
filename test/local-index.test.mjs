@@ -208,3 +208,129 @@ test('seed importer & local-index: downloads .tar.zst, verifies SHA-256, indexes
     fs.rmSync(tmp, { recursive: true, force: true })
   }
 })
+
+test('lossless offline catch-up: backfills paginated AiringSchedule episodes after 48h downtime, persists cursor, and refreshes stale 48h v2s', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shiru-catchup-test-'))
+  const nowMs = Date.now()
+  const nowSec = Math.floor(nowMs / 1000)
+  const cursorBefore = nowSec - 48 * 3600
+
+  // Simulate PC that shut down 48 hours ago
+  fs.writeFileSync(path.join(tmp, 'catchup-state.json'), JSON.stringify({ lastCatchupAt: cursorBefore, caughtUpTotal: 0 }))
+
+  const mediaA = {
+    id: 20001,
+    episodes: 12,
+    format: 'TV',
+    status: 'RELEASING',
+    genres: ['Action'],
+    title: { romaji: 'Missed Show Alpha', english: 'Missed Show Alpha', userPreferred: 'Missed Show Alpha' },
+    synonyms: [],
+    relations: { edges: [] }
+  }
+  const mediaB = {
+    id: 20002,
+    episodes: 12,
+    format: 'TV',
+    status: 'RELEASING',
+    genres: ['Comedy'],
+    title: { romaji: 'Obscure Show Beta', english: 'Obscure Show Beta', userPreferred: 'Obscure Show Beta' },
+    synonyms: [],
+    relations: { edges: [] }
+  }
+
+  const origFetch = globalThis.fetch
+  const anilistPages = []
+  const mockFetch = async (url, init) => {
+    const u = String(url)
+    if (u === 'https://graphql.anilist.co') {
+      const body = JSON.parse(init?.body || '{}')
+      const page = body?.variables?.page || 1
+      anilistPages.push(page)
+      if (page === 1) {
+        return new Response(JSON.stringify({
+          data: {
+            Page: {
+              pageInfo: { hasNextPage: true },
+              airingSchedules: [
+                { airingAt: nowSec - 36 * 3600, episode: 4, media: mediaA },
+                { airingAt: nowSec - 20 * 3600, episode: 5, media: mediaA }
+              ]
+            }
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        data: {
+          Page: {
+            pageInfo: { hasNextPage: false },
+            airingSchedules: [
+              { airingAt: nowSec - 4 * 3600, episode: 9, media: mediaB }
+            ]
+          }
+        }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.startsWith('https://feed.example.test/')) {
+      const q = decodeURIComponent(u)
+      const xml = q.includes('Alpha')
+        ? `<rss><channel>
+            <item><title>[SubsPlease] Missed Show Alpha - 04 (1080p).mkv</title><torznab:attr name="infohash" value="${HEX('1')}" /><torznab:attr name="seeders" value="50" /><torznab:attr name="size" value="1200000000" /></item>
+            <item><title>[SubsPlease] Missed Show Alpha - 05 (1080p).mkv</title><torznab:attr name="infohash" value="${HEX('2')}" /><torznab:attr name="seeders" value="60" /><torznab:attr name="size" value="1200000000" /></item>
+          </channel></rss>`
+        : `<rss><channel>
+            <item><title>[Erai-raws] Obscure Show Beta - 09 (1080p).mkv</title><torznab:attr name="infohash" value="${HEX('3')}" /><torznab:attr name="seeders" value="30" /><torznab:attr name="size" value="1100000000" /></item>
+          </channel></rss>`
+      return new Response(xml, { status: 200, headers: { 'content-type': 'application/xml' } })
+    }
+    return origFetch(url, init)
+  }
+
+  globalThis.fetch = mockFetch
+  const app = createLocalIndexServer({
+    host: '127.0.0.1',
+    port: 0,
+    dataDir: tmp,
+    seedDir: path.join(tmp, 'seed'),
+    seedUrl: '',
+    sourcesUrl: '',
+    feedUrls: 'https://feed.example.test/rss?q={query}',
+    refreshMinutes: 0,
+    useAnizip: false,
+    enableUsenet: false,
+    yieldMs: 0,
+    now: () => nowMs,
+    fetch: mockFetch,
+    log: () => {}
+  })
+
+  try {
+    // 1. First catch-up after 48h offline builds ALL 3 missed episodes across 2 pages (including multi-ep drop 4 & 5)
+    const r1 = await app.catchupSweep()
+    assert.deepEqual(anilistPages, [1, 2], 'paginated through all AiringSchedule pages')
+    assert.equal(r1.discovered, 3)
+    assert.equal(r1.built, 3, 'built every missed episode including multi-episode drop and obscure show')
+    assert.ok(fs.existsSync(path.join(tmp, 'anilist', '20001', '4.rank.json.gz')))
+    assert.ok(fs.existsSync(path.join(tmp, 'anilist', '20001', '5.rank.json.gz')))
+    assert.ok(fs.existsSync(path.join(tmp, 'anilist', '20002', '9.rank.json.gz')))
+
+    const saved = JSON.parse(fs.readFileSync(path.join(tmp, 'catchup-state.json'), 'utf8'))
+    assert.equal(saved.lastCatchupAt, nowSec, 'advanced and persisted catchup cursor to now')
+    assert.equal(saved.caughtUpTotal, 3)
+
+    // 2. Immediate repeat sweep skips all 3 fresh files (0 redundant builds)
+    const r2 = await app.catchupSweep()
+    assert.equal(r2.built, 0, 'skips already-fresh episodes')
+
+    // 3. Age one episode from the last 48h by 7 hours -> recheck window rebuilds it to catch late v2/fansubs
+    const ep9File = path.join(tmp, 'anilist', '20002', '9.rank.json.gz')
+    const oldTime = new Date(nowMs - 7 * 3600_000)
+    fs.utimesSync(ep9File, oldTime, oldTime)
+    const r3 = await app.catchupSweep()
+    assert.equal(r3.built, 1, 're-checks stale episode inside 48h window for late v2/fansubs')
+  } finally {
+    globalThis.fetch = origFetch
+    await app.stop()
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+})

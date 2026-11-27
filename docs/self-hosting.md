@@ -96,8 +96,12 @@ pnpm run seed
 | `FEED_URLS` | *(empty)* | Optional extra comma-separated RSS 2.0, Torznab 1.3, or JSON feed URL templates (`{query}`, `{orQuery}`, `{nativeQuery}`, `{anilistId}`, `{malId}`, `{anidbId}`, `{anidbEid}`, `{episode}`) |
 | `ANILIST_USER` | *(empty)* | Optional AniList username — pre-builds next episodes of shows in `CURRENT` / `REPEATING` |
 | `WATCH_ANILIST_IDS` | *(empty)* | Optional comma-separated AniList IDs to always pre-build |
-| `PREBUILD_AIRING` | `1` | Pre-build latest aired episode of currently airing popular shows |
-| `PREBUILD_LIMIT` | `25` | Number of airing shows pre-built per sweep |
-| `REFRESH_MINUTES` | `15` | Background pre-build sweep interval (`0` disables background sweeps; on-demand caching still works) |
+| `PREBUILD_AIRING` | `1` | Pre-build aired episodes & run lossless offline catch-up via AniList `AiringSchedule` |
+| `PREBUILD_LIMIT` | `25` | Number of top airing shows checked in the supplementary sweep |
+| `CATCHUP_ENABLED` | `1` | Enable lossless offline catch-up from `catchup-state.json` (or `seed.json`'s `generatedAt` on first boot) |
+| `CATCHUP_MAX_DAYS` | `30` | Maximum offline backfill window (days) per boot |
+| `RECHECK_WINDOW_HOURS` | `48` | Re-check episodes aired in the last N hours once >`RECHECK_MIN_AGE_HOURS` old to catch late fansubs/v2s |
+| `RECHECK_MIN_AGE_HOURS` | `6` | Minimum cache age (hours) before re-checking an episode inside the 48h window |
+| `REFRESH_MINUTES` | `15` | Background pre-build & catch-up interval in minutes (`0` disables background sweeps; on-demand caching still works) |
 | `SITE_NAME` | `Local Pre-Built Index` | Brand name returned in `GET /site.json` |
 | `SITE_TRACKERS` | *(empty)* | Optional comma-separated BitTorrent tracker URLs advertised in `/site.json` |

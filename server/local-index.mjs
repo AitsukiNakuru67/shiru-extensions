@@ -66,6 +66,22 @@ const ANILIST_USER_LIST_QUERY = `query ($userName: String) {
     }
   }
 }`
+const ANILIST_AIRING_SCHEDULE_QUERY = `query ($page: Int, $perPage: Int, $from: Int, $to: Int) {
+  Page(page: $page, perPage: $perPage) {
+    pageInfo { hasNextPage }
+    airingSchedules(airingAt_greater: $from, airingAt_lesser: $to, sort: TIME) {
+      airingAt
+      episode
+      media {
+        id idMal episodes duration format status genres
+        title { romaji english native userPreferred }
+        synonyms
+        nextAiringEpisode { episode airingAt }
+        relations { edges { relationType node { id format episodes title { romaji english native userPreferred } } } }
+      }
+    }
+  }
+}`
 
 async function queryAniList (query, variables, fetchImpl = fetch) {
   const res = await fetchImpl(ANILIST_ENDPOINT, {
@@ -132,6 +148,13 @@ export function createLocalIndexServer (opts = {}) {
   const prebuildAiring = (opts.prebuildAiring ?? process.env.PREBUILD_AIRING ?? '1') !== '0'
   const prebuildLimit = Math.max(1, Math.min(100, Number(opts.prebuildLimit ?? process.env.PREBUILD_LIMIT ?? 25) || 25))
   const refreshMinutes = Math.max(0, Number(opts.refreshMinutes ?? process.env.REFRESH_MINUTES ?? 15) || 0)
+  const catchupEnabled = (opts.catchupEnabled ?? process.env.CATCHUP_ENABLED ?? '1') !== '0'
+  const catchupMaxDays = Math.max(1, Math.min(90, Number(opts.catchupMaxDays ?? process.env.CATCHUP_MAX_DAYS ?? 30) || 30))
+  const recheckWindowHours = Math.max(0, Math.min(168, Number(opts.recheckWindowHours ?? process.env.RECHECK_WINDOW_HOURS ?? 48) || 48))
+  const recheckMinAgeHours = Math.max(1, Math.min(48, Number(opts.recheckMinAgeHours ?? process.env.RECHECK_MIN_AGE_HOURS ?? 6) || 6))
+  const catchupMaxPages = Math.max(1, Math.min(100, Number(opts.catchupMaxPages ?? process.env.CATCHUP_MAX_PAGES ?? 40) || 40))
+  const yieldMs = opts.yieldMs !== undefined ? Math.max(0, Number(opts.yieldMs) || 0) : 200
+  const nowFn = typeof opts.now === 'function' ? opts.now : Date.now
   const useAnizip = (opts.useAnizip ?? process.env.USE_ANIZIP ?? '1') !== '0'
   const enableUsenet = (opts.enableUsenet ?? process.env.ENABLE_USENET ?? '1') !== '0'
   const amenzbApiKey = String(opts.amenzbApiKey ?? process.env.AMENZB_API_KEY ?? '').trim()
@@ -144,6 +167,33 @@ export function createLocalIndexServer (opts = {}) {
   fs.mkdirSync(path.join(dataDir, 'anilist'), { recursive: true })
   const seedStore = openSeedStore(seedDir)
   let seedImporting = false
+
+  const catchupStatePath = path.join(dataDir, 'catchup-state.json')
+  function loadCatchupState () {
+    try {
+      if (fs.existsSync(catchupStatePath)) {
+        const parsed = JSON.parse(fs.readFileSync(catchupStatePath, 'utf8'))
+        if (parsed && typeof parsed === 'object') {
+          return {
+            lastCatchupAt: Number(parsed.lastCatchupAt) || 0,
+            lastCatchupRunAt: parsed.lastCatchupRunAt || null,
+            caughtUpTotal: Number(parsed.caughtUpTotal) || 0
+          }
+        }
+      }
+    } catch {}
+    return { lastCatchupAt: 0, lastCatchupRunAt: null, caughtUpTotal: 0 }
+  }
+  function saveCatchupState (state) {
+    try {
+      const tmp = `${catchupStatePath}.tmp.${process.pid}`
+      fs.writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n')
+      fs.renameSync(tmp, catchupStatePath)
+    } catch {}
+  }
+  const catchupState = loadCatchupState()
+  let catchupRunning = false
+  let catchupPending = 0
 
   /** Hot in-memory cache of serialized gzipped + plain JSON responses for sub-millisecond reads. */
   const mem = new Map()
@@ -322,10 +372,140 @@ export function createLocalIndexServer (opts = {}) {
     }
   }
 
-  /** Pre-build currently airing episodes and/or watched AniList shows ahead of time. */
+  /**
+   * Lossless offline catch-up via AniList's paginated AiringSchedule API.
+   * Resumes from `catchup-state.json` (or `seed.json`'s `generatedAt` on first boot), builds every
+   * missed episode chronologically, checkpoints per episode so mid-catchup shutdowns never lose
+   * progress, and re-checks episodes from the last `RECHECK_WINDOW_HOURS` (default 48h) to catch
+   * delayed fansubs/v2s once their cached file is older than `RECHECK_MIN_AGE_HOURS` (default 6h).
+   */
+  async function catchupSweep () {
+    if (!hasSources) return { built: 0, discovered: 0, skipped: 'no SOURCES_URL or FEED_URLS configured' }
+    if (!catchupEnabled) return { built: 0, discovered: 0, skipped: 'catchup disabled' }
+    if (catchupRunning) return { built: 0, discovered: 0, skipped: 'already running' }
+
+    catchupRunning = true
+    catchupPending = 0
+    let built = 0
+    let discovered = 0
+    let discoveryOk = true
+
+    try {
+      const nowMs = nowFn()
+      const nowSec = Math.floor(nowMs / 1000)
+      const floorSec = nowSec - catchupMaxDays * 86400
+
+      // Determine starting cursor: saved cursor -> seed timestamp -> 48h default
+      let cursorSec = Number(catchupState.lastCatchupAt) || 0
+      if (!cursorSec) {
+        const seedTs = seedStore.meta?.generatedAt ? Math.floor(Date.parse(seedStore.meta.generatedAt) / 1000) : 0
+        cursorSec = seedTs > 0 ? Math.max(floorSec, Math.min(seedTs, nowSec)) : (nowSec - 48 * 3600)
+      } else if (cursorSec < floorSec) {
+        cursorSec = floorSec
+      }
+
+      const overlapSec = 6 * 3600
+      const recheckFromSec = recheckWindowHours > 0 ? (nowSec - recheckWindowHours * 3600) : nowSec
+      const fromSec = Math.max(floorSec, Math.min(cursorSec - overlapSec, recheckFromSec))
+
+      /** @type {Array<{ id: number, ep: number, airingAt: number, media: any }>} */
+      const scheduled = []
+      const seen = new Set()
+
+      for (let page = 1; page <= catchupMaxPages; page++) {
+        try {
+          const data = await queryAniList(
+            ANILIST_AIRING_SCHEDULE_QUERY,
+            { page, perPage: 50, from: fromSec, to: nowSec },
+            fetchImpl
+          )
+          const pageObj = data?.Page
+          const rows = Array.isArray(pageObj?.airingSchedules) ? pageObj.airingSchedules : []
+          for (const row of rows) {
+            const m = row?.media
+            const id = Number(m?.id)
+            const ep = Number(row?.episode)
+            const airingAt = Number(row?.airingAt) || 0
+            if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(ep) || ep <= 0) continue
+            const k = `${id}:${ep}`
+            if (seen.has(k)) continue
+            seen.add(k)
+            scheduled.push({ id, ep, airingAt, media: m })
+          }
+          if (!pageObj?.pageInfo?.hasNextPage || rows.length === 0) break
+          if (yieldMs > 0) await new Promise((r) => setTimeout(r, Math.max(yieldMs, 350)))
+        } catch (err) {
+          discoveryOk = false
+          stats.lastError = `catchup discovery: ${String(err?.message || err)}`
+          log(stats.lastError)
+          break
+        }
+      }
+
+      discovered = scheduled.length
+      catchupPending = scheduled.length
+      const minFreshMs = Math.max(15, refreshMinutes || 15) * 60_000
+      const recheckMinAgeMs = recheckMinAgeHours * 3600_000
+
+      for (const item of scheduled) {
+        catchupPending = Math.max(0, catchupPending - 1)
+        const file = rankFilePath(item.id, item.ep)
+        const exists = fs.existsSync(file)
+        const ageMs = exists ? (nowFn() - fs.statSync(file).mtimeMs) : Infinity
+        const isNewSinceCursor = item.airingAt > cursorSec
+        const inRecheckWindow = item.airingAt >= recheckFromSec
+
+        let shouldBuild = false
+        if (!exists) {
+          shouldBuild = true
+        } else if (isNewSinceCursor && ageMs >= minFreshMs) {
+          shouldBuild = true
+        } else if (inRecheckWindow && ageMs >= recheckMinAgeMs) {
+          shouldBuild = true
+        }
+
+        if (shouldBuild) {
+          try {
+            const res = await buildEpisode(item.id, item.ep, { media: item.media, fresh: true })
+            if (res) {
+              built++
+              catchupState.caughtUpTotal++
+            }
+          } catch (err) {
+            stats.lastError = `catchup ${item.id}:${item.ep}: ${String(err?.message || err)}`
+          }
+          if (yieldMs > 0) await new Promise((r) => setTimeout(r, yieldMs))
+        }
+
+        // Advance and checkpoint cursor per episode so mid-catchup shutdowns resume losslessly.
+        if (item.airingAt > catchupState.lastCatchupAt) {
+          catchupState.lastCatchupAt = item.airingAt
+          saveCatchupState(catchupState)
+        }
+      }
+
+      if (discoveryOk && nowSec > catchupState.lastCatchupAt) {
+        catchupState.lastCatchupAt = nowSec
+      }
+      catchupState.lastCatchupRunAt = new Date(nowFn()).toISOString()
+      saveCatchupState(catchupState)
+      stats.cachedFiles = countDiskFiles()
+      if (built) log(`lossless catch-up complete: ${built}/${discovered} episode(s) built (cursor: ${new Date(catchupState.lastCatchupAt * 1000).toISOString()})`)
+      return { built, discovered, lastCatchupAt: catchupState.lastCatchupAt }
+    } finally {
+      catchupRunning = false
+      catchupPending = 0
+    }
+  }
+
+  /** Pre-build currently airing episodes (with lossless offline catch-up) and watched AniList shows. */
   async function prebuildSweep () {
     if (!hasSources) return { built: 0, skipped: 'no SOURCES_URL or FEED_URLS configured' }
     let built = 0
+    if (prebuildAiring && catchupEnabled) {
+      const cu = await catchupSweep()
+      built += Number(cu?.built) || 0
+    }
     const targets = new Map()
     const addTarget = (media, ep) => {
       const id = Number(media?.id)
@@ -458,6 +638,14 @@ export function createLocalIndexServer (opts = {}) {
           sourcesUrl: sourcesUrl || null,
           seedReady: seedStore.ready,
           seedImporting,
+          catchup: {
+            enabled: catchupEnabled,
+            running: catchupRunning,
+            pending: catchupPending,
+            lastCatchupAt: catchupState.lastCatchupAt ? new Date(catchupState.lastCatchupAt * 1000).toISOString() : null,
+            lastCatchupRunAt: catchupState.lastCatchupRunAt,
+            caughtUpTotal: catchupState.caughtUpTotal
+          },
           ...stats,
           seedEpisodes: seedStore.count
         })
@@ -556,6 +744,7 @@ export function createLocalIndexServer (opts = {}) {
   return {
     server,
     buildEpisode,
+    catchupSweep,
     prebuildSweep,
     readCached,
     writeCached,
