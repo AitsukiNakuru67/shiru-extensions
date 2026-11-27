@@ -2,7 +2,7 @@
   {
     "id": "release-index",
     "name": "Release Matcher",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "main": "sources/release-index.js",
     "update": "gh:AitsukiNakuru67/shiru-extensions",
     "type": "torrent",
@@ -11,28 +11,36 @@
     "settings": [
       {
         "type": "text",
+        "key": "sourcesUrl",
+        "label": "Sources Manifest URL",
+        "default": "https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json",
+        "placeholder": "https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json",
+        "description": "Remote JSON manifest listing feed sources and trackers fetched automatically (used when Release Index URL is blank)."
+      },
+      {
+        "type": "text",
         "key": "indexUrl",
-        "label": "Release Index URL",
+        "label": "Release Index URL (Optional)",
         "default": "",
-        "placeholder": "https://your-index.example",
-        "description": "Optional: base URL of a compatible release index server (HTTPS or localhost). Leave blank to run the on-device matcher against Feed URLs below."
+        "placeholder": "http://127.0.0.1:8787",
+        "description": "Optional: base URL of a pre-built release index server (HTTPS or localhost). Overrides live source fetching when set."
       },
       {
         "type": "text",
         "key": "feedUrls",
-        "label": "Feed URLs (On-Device)",
+        "label": "Extra Feed URLs (Optional)",
         "default": "",
         "placeholder": "https://feed.example/api?t=tvsearch&q={query}",
-        "description": "Comma-separated RSS 2.0, Torznab 1.3, or JSON feed URLs queried live on your device. Supports {query}, {anilistId}, {malId}, {anidbId}, and {episode} placeholders."
+        "description": "Optional comma-separated extra RSS 2.0, Torznab 1.3, or JSON feed URLs queried alongside the Sources Manifest."
       },
       {
         "type": "toggle",
         "key": "useAnizip",
         "label": "Fetch AniZip mappings",
         "default": true,
-        "description": "Fetch and cache AniList-to-AniDB/TVDB episode mappings locally for more accurate season and episode matching."
+        "description": "Fetch and cache AniList-to-AniDB/TVDB episode mappings locally for more accurate season, episode, and ID-based matching."
       }
     ],
-    "description": "Runs Shiru's full episode matcher, verifier, and ranker locally inside the extension worker (from your configured RSS/Torznab/JSON feeds) or connects to a compatible Release Index URL."
+    "description": "Runs Shiru's full episode matcher, verifier, and ranker locally inside the extension worker from a remote Sources Manifest (or connects to a pre-built Release Index URL)."
   }
 ]

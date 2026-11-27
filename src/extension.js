@@ -1,5 +1,12 @@
 import AbstractSource from '../sources/abstract.js'
-import { normalizeBaseUrl, parseFeedTemplates, fetchFeedCandidates } from './feeds.js'
+import {
+  DEFAULT_SOURCES_URL,
+  normalizeAllowedUrl,
+  normalizeBaseUrl,
+  parseFeedTemplates,
+  fetchSourcesManifest,
+  fetchFeedCandidates
+} from './feeds.js'
 import { matchCandidatesLocally } from './local-matcher.js'
 
 const HEX40 = /^[0-9a-f]{40}$/i
@@ -37,6 +44,14 @@ export default new class ReleaseMatcherExtension extends AbstractSource {
     return normalizeBaseUrl(this.settings?.indexUrl || '')
   }
 
+  #sourcesUrl () {
+    // Respect explicit empty string (disables remote manifest); default to permanent Pixeldrain manifest when unset.
+    if (this.settings && Object.prototype.hasOwnProperty.call(this.settings, 'sourcesUrl')) {
+      return normalizeAllowedUrl(this.settings.sourcesUrl || '')
+    }
+    return normalizeAllowedUrl(DEFAULT_SOURCES_URL)
+  }
+
   #feedTemplates () {
     return parseFeedTemplates(this.settings?.feedUrls || '')
   }
@@ -66,6 +81,23 @@ export default new class ReleaseMatcherExtension extends AbstractSource {
     return this.#trackers
   }
 
+  async #resolveActiveConfig ({ fresh = false } = {}) {
+    const directBase = this.#indexBase()
+    if (directBase) return { indexUrl: directBase, sources: [], trackers: [] }
+
+    const sUrl = this.#sourcesUrl()
+    const manifest = sUrl ? await fetchSourcesManifest(sUrl, { fresh }) : null
+    if (manifest?.indexUrl) {
+      return { indexUrl: manifest.indexUrl, sources: [], trackers: manifest.trackers || [] }
+    }
+
+    const sources = [
+      ...(manifest?.sources || []),
+      ...this.#feedTemplates()
+    ]
+    return { indexUrl: '', sources, trackers: manifest?.trackers || [] }
+  }
+
   async validate () {
     const base = this.#indexBase()
     if (base) {
@@ -78,7 +110,6 @@ export default new class ReleaseMatcherExtension extends AbstractSource {
         return false
       }
     }
-    // Keep loadable when unconfigured or using feed URLs so the user can edit settings freely.
     return true
   }
 
@@ -128,47 +159,45 @@ export default new class ReleaseMatcherExtension extends AbstractSource {
 
   /**
    * Primary Shiru structured-list entry point.
-   * - If `indexUrl` is set: fetches `.list.json` / `.rank.json` / `POST /rank` from the configured server.
-   * - Else if `feedUrls` is set: fetches configured RSS/Torznab/JSON feeds live and runs Shiru's full
-   *   matcher, verifier, and ranker directly inside this Web Worker.
+   * - If `indexUrl` is set (or provided by `sourcesUrl`): fetches `.list.json` / `.rank.json` / `POST /rank`.
+   * - Otherwise fetches live sources from `sourcesUrl` + `feedUrls` and runs Shiru's full matcher,
+   *   verifier, and ranker directly inside this Web Worker.
    * @param {import('../index.d.ts').TorrentQuery} query
    * @param {{ fresh?: boolean }} [opts]
    */
   async list (query, opts = {}) {
     this.#bindAnitomy()
-    const base = this.#indexBase()
-    if (base) return this.#remoteList(base, query, opts)
+    const fresh = opts?.fresh === true
+    const cfg = await this.#resolveActiveConfig({ fresh })
+    if (cfg.indexUrl) return this.#remoteList(cfg.indexUrl, query, opts)
 
-    const templates = this.#feedTemplates()
-    if (!templates.length) {
-      throw new Error('Configure a Release Index URL or Feed URLs in Extension Settings to search.')
+    if (!cfg.sources.length) {
+      throw new Error('Configure a Sources Manifest URL, Release Index URL, or Feed URLs in Extension Settings to search.')
     }
-    const candidates = await fetchFeedCandidates(templates, query, { fresh: opts?.fresh === true })
-    return matchCandidatesLocally(query, candidates, {
-      useAnizip: this.settings?.useAnizip !== false,
-      fresh: opts?.fresh === true
-    })
+    const useAnizip = this.settings?.useAnizip !== false
+    const candidates = await fetchFeedCandidates(cfg.sources, query, { fresh, useAnizip })
+    return matchCandidatesLocally(query, candidates, { useAnizip, fresh })
   }
 
   async #flatQuery (query) {
     this.#bindAnitomy()
-    const base = this.#indexBase()
-    if (base) {
+    const cfg = await this.#resolveActiveConfig()
+    if (cfg.indexUrl) {
       const anilistId = Number(query?.anilistId)
       const episode = Number(query?.episode) || 1
       if (!Number.isSafeInteger(anilistId) || anilistId <= 0) return []
-      const trackers = await this.#loadTrackers(base)
-      const res = await fetch(`${base}/anime/anilist/${anilistId}/${episode}.json`)
+      const trackers = await this.#loadTrackers(cfg.indexUrl)
+      const res = await fetch(`${cfg.indexUrl}/anime/anilist/${anilistId}/${episode}.json`)
       if (!res.ok) return []
       const body = await res.json()
       const rows = Array.isArray(body?.releases) ? body.releases : []
       return rows.filter((r) => r && !r.stale && r.kind !== 'nzb').map((r) => toTorrentResult(r, trackers))
     }
 
-    const templates = this.#feedTemplates()
-    if (!templates.length) return []
-    const candidates = await fetchFeedCandidates(templates, query)
-    return candidates.filter((r) => r.kind !== 'nzb').map((r) => toTorrentResult(r))
+    if (!cfg.sources.length) return []
+    const useAnizip = this.settings?.useAnizip !== false
+    const candidates = await fetchFeedCandidates(cfg.sources, query, { useAnizip })
+    return candidates.filter((r) => r.kind !== 'nzb').map((r) => toTorrentResult(r, cfg.trackers))
   }
 
   single (query) { return this.#flatQuery(query) }

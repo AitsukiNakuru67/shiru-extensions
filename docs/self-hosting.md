@@ -73,7 +73,8 @@ You can connect either way:
 | `HOST` | `127.0.0.1` | Bind address (`0.0.0.0` inside Docker) |
 | `PORT` | `8787` | HTTP port |
 | `DATA_DIR` | `./data/cache` | Directory storing pre-built gzipped `.rank.json.gz` files |
-| `FEED_URLS` | *(empty)* | Comma-separated RSS 2.0, Torznab 1.3, or JSON feed URL templates (`{query}`, `{anilistId}`, `{malId}`, `{anidbId}`, `{episode}`) |
+| `SOURCES_URL` | `https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json` | Remote JSON manifest listing feed sources and trackers (set `off` to disable) |
+| `FEED_URLS` | *(empty)* | Optional extra comma-separated RSS 2.0, Torznab 1.3, or JSON feed URL templates (`{query}`, `{nativeQuery}`, `{anilistId}`, `{malId}`, `{anidbId}`, `{anidbEid}`, `{episode}`) |
 | `ANILIST_USER` | *(empty)* | Optional AniList username — pre-builds next episodes of shows in `CURRENT` / `REPEATING` |
 | `WATCH_ANILIST_IDS` | *(empty)* | Optional comma-separated AniList IDs to always pre-build |
 | `PREBUILD_AIRING` | `1` | Pre-build latest aired episode of currently airing popular shows |

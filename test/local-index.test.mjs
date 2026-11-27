@@ -37,6 +37,7 @@ test('local pre-builder server: pre-builds to disk, serves cached episode in mil
     host: '127.0.0.1',
     port: 0,
     dataDir: tmp,
+    sourcesUrl: '',
     feedUrls: 'https://feed.example.test/api?q={query}',
     refreshMinutes: 0,
     useAnizip: false,

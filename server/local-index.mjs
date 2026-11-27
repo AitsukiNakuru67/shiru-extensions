@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url'
 import ext from '../sources/release-index.js'
 import { anitomyPure } from '../src/parse-title.js'
 
+const DEFAULT_SOURCES_URL = 'https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 const ANILIST_ENDPOINT = 'https://graphql.anilist.co'
@@ -85,6 +86,9 @@ export function createLocalIndexServer (opts = {}) {
   const port = Number(opts.port ?? process.env.PORT ?? 8787)
   const dataDir = path.resolve(opts.dataDir ?? process.env.DATA_DIR ?? path.join(ROOT, 'data/cache'))
   const feedUrls = String(opts.feedUrls ?? process.env.FEED_URLS ?? '').trim()
+  const rawSourcesUrl = opts.sourcesUrl !== undefined ? opts.sourcesUrl : (process.env.SOURCES_URL ?? DEFAULT_SOURCES_URL)
+  const sourcesUrl = /^(?:off|none|false|0)$/i.test(String(rawSourcesUrl || '').trim()) ? '' : String(rawSourcesUrl || '').trim()
+  const hasSources = !!(feedUrls || sourcesUrl)
   const siteName = String(opts.siteName ?? process.env.SITE_NAME ?? 'Local Pre-Built Index').trim()
   const trackers = String(opts.trackers ?? process.env.SITE_TRACKERS ?? '')
     .split(/[\n,]+/)
@@ -103,7 +107,7 @@ export function createLocalIndexServer (opts = {}) {
   const log = opts.log || ((...a) => console.log(`[local-index ${new Date().toISOString()}]`, ...a))
 
   ext.anitomyscript = opts.anitomyscript || anitomyPure
-  ext.settings = { indexUrl: '', feedUrls, useAnizip }
+  ext.settings = { indexUrl: '', sourcesUrl, feedUrls, useAnizip }
 
   fs.mkdirSync(path.join(dataDir, 'anilist'), { recursive: true })
 
@@ -224,7 +228,7 @@ export function createLocalIndexServer (opts = {}) {
     }
     if (inflight.has(key)) return inflight.get(key)
     const job = (async () => {
-      if (!feedUrls) return null
+      if (!hasSources) return null
       const m = media || await resolveMedia(id)
       if (!m) return null
       const titles = [m.title?.romaji, m.title?.english, ...(m.synonyms || [])].filter(Boolean)
@@ -271,7 +275,7 @@ export function createLocalIndexServer (opts = {}) {
 
   /** Pre-build currently airing episodes and/or watched AniList shows ahead of time. */
   async function prebuildSweep () {
-    if (!feedUrls) return { built: 0, skipped: 'no FEED_URLS configured' }
+    if (!hasSources) return { built: 0, skipped: 'no SOURCES_URL or FEED_URLS configured' }
     let built = 0
     const targets = new Map()
     const addTarget = (media, ep) => {
@@ -390,7 +394,7 @@ export function createLocalIndexServer (opts = {}) {
       }
 
       if (req.method === 'GET' && parts.length === 1 && (parts[0] === 'health.json' || parts[0] === 'healthz')) {
-        return sendJson(req, res, 200, { ok: true, mode: 'local-prebuilder', feedConfigured: !!feedUrls, ...stats })
+        return sendJson(req, res, 200, { ok: true, mode: 'local-prebuilder', feedConfigured: hasSources, sourcesUrl: sourcesUrl || null, ...stats })
       }
 
       if (req.method === 'GET' && parts.length === 1 && parts[0] === 'site.json') {
@@ -438,7 +442,7 @@ export function createLocalIndexServer (opts = {}) {
           const ep = Number(m[1])
           const cached = readCached(id, ep)
           if (cached) return sendCached(req, res, cached)
-          if (!feedUrls) return sendJson(req, res, 404, { error: 'no cached file yet and FEED_URLS is not configured' })
+          if (!hasSources) return sendJson(req, res, 404, { error: 'no cached file yet and no sources configured' })
           const built = await buildEpisode(id, ep)
           if (built) return sendCached(req, res, built)
           return sendJson(req, res, 404, { error: 'not found' })
@@ -454,7 +458,7 @@ export function createLocalIndexServer (opts = {}) {
         if (!Number.isSafeInteger(id) || id <= 0) return sendJson(req, res, 400, { error: 'anilistId required' })
         const cached = readCached(id, ep)
         if (cached) return sendCached(req, res, cached)
-        if (!feedUrls) return sendJson(req, res, 404, { error: 'FEED_URLS not configured on local server' })
+        if (!hasSources) return sendJson(req, res, 404, { error: 'no sources configured on local server' })
         const built = await buildEpisode(id, ep, { resolution })
         if (built) return sendCached(req, res, built)
         return sendJson(req, res, 404, { error: 'no results' })
@@ -493,8 +497,8 @@ export function createLocalIndexServer (opts = {}) {
       await new Promise((resolve) => server.listen(port, host, resolve))
       const addr = server.address()
       const boundPort = typeof addr === 'object' && addr ? addr.port : port
-      log(`listening on http://${host}:${boundPort} (cache: ${dataDir}, feeds: ${feedUrls ? 'configured' : 'not set'})`)
-      if (refreshMinutes > 0 && feedUrls) {
+      log(`listening on http://${host}:${boundPort} (cache: ${dataDir}, sources: ${hasSources ? (sourcesUrl || 'FEED_URLS') : 'not set'})`)
+      if (refreshMinutes > 0 && hasSources) {
         setTimeout(() => prebuildSweep().catch(() => {}), 5000).unref()
         prebuildTimer = setInterval(() => prebuildSweep().catch(() => {}), refreshMinutes * 60_000)
         prebuildTimer.unref()
