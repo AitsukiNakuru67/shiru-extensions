@@ -220,7 +220,7 @@ export function createLocalIndexServer (opts = {}) {
     return path.join(dataDir, 'anilist', String(id), `${ep}.rank.json.gz`)
   }
 
-  function readCached (id, ep) {
+  async function readCached (id, ep) {
     const key = `${id}:${ep}`
     const hit = mem.get(key)
     if (hit) {
@@ -240,9 +240,18 @@ export function createLocalIndexServer (opts = {}) {
       } catch {}
     }
     if (seedStore.ready) {
-      const payload = seedStore.getRankPayload(id, ep, { trackers: effectiveTrackers() })
-      if (payload) {
-        const wrapped = { ...payload, anilistId: id, episode: ep, builtAt: payload.seededAt || new Date().toISOString() }
+      const rawPayload = seedStore.getRankPayload(id, ep, { trackers: effectiveTrackers() })
+      if (rawPayload) {
+        let formatted = rawPayload
+        if (typeof ext.formatSeedPayload === 'function') {
+          try {
+            formatted = await ext.formatSeedPayload(rawPayload, {
+              episode: ep,
+              trackers: effectiveTrackers()
+            })
+          } catch {}
+        }
+        const wrapped = { ...formatted, anilistId: id, episode: ep, builtAt: formatted.seededAt || new Date().toISOString() }
         const json = JSON.stringify(wrapped)
         const gz = zlib.gzipSync(Buffer.from(json, 'utf8'))
         const entry = { json, gz, builtAt: wrapped.builtAt, cacheSource: 'seed' }
@@ -319,15 +328,36 @@ export function createLocalIndexServer (opts = {}) {
     return m
   }
 
-  async function buildEpisode (id, ep, { media = null, resolution = '1080', fresh = false } = {}) {
-    const key = `${id}:${ep}`
+  const inflightSubs = new Map()
+
+  async function buildEpisode (id, ep, { media = null, resolution = '1080', fresh = false, onProgress = null, onPartial = null } = {}) {
+    const key = `${id}:${ep}:${resolution}`
     if (!fresh) {
-      const existing = readCached(id, ep)
+      const existing = await readCached(id, ep)
       if (existing) return existing
     }
+    if (onProgress || onPartial) {
+      let subs = inflightSubs.get(key)
+      if (!subs) {
+        subs = new Set()
+        inflightSubs.set(key, subs)
+      }
+      subs.add({ onProgress, onPartial })
+    }
     if (inflight.has(key)) return inflight.get(key)
+    const notify = (kind, payload) => {
+      const subs = inflightSubs.get(key)
+      if (!subs) return
+      for (const s of subs) {
+        try {
+          if (kind === 'progress' && typeof s.onProgress === 'function') s.onProgress(payload)
+          if (kind === 'partial' && typeof s.onPartial === 'function') s.onPartial(payload)
+        } catch {}
+      }
+    }
     const job = (async () => {
       if (!hasSources) return null
+      notify('progress', { progress: 0.06, stage: 'Loading episode info…' })
       const m = media || await resolveMedia(id)
       if (!m) return null
       const titles = [m.title?.romaji, m.title?.english, ...(m.synonyms || [])].filter(Boolean)
@@ -338,12 +368,19 @@ export function createLocalIndexServer (opts = {}) {
         resolution,
         titles,
         media: m
-      }, { fresh })
+      }, {
+        fresh,
+        onProgress: (evt) => notify('progress', evt),
+        onPartial: (list) => notify('partial', list)
+      })
       if (!payload || !payload.sections) return null
       const saved = writeCached(id, ep, payload)
       stats.cachedFiles = countDiskFiles()
       return saved
-    })().finally(() => inflight.delete(key))
+    })().finally(() => {
+      inflight.delete(key)
+      inflightSubs.delete(key)
+    })
     inflight.set(key, job)
     return job
   }
@@ -653,13 +690,16 @@ export function createLocalIndexServer (opts = {}) {
 
       if (req.method === 'GET' && parts.length === 1 && parts[0] === 'site.json') {
         await refreshManifestTrackers()
-        const origin = `http://${req.headers.host || `${host}:${port}`}`
+        const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http'
+        const reqHost = String(req.headers['x-forwarded-host'] || req.headers.host || `${host}:${port}`).split(',')[0].trim()
+        const origin = `${proto}://${reqHost}`
         return sendJson(req, res, 200, {
           brand: { name: siteName, origin },
           features: {
             releases: true,
             listFiles: false,
             rank: true,
+            rankStream: true,
             requests: true,
             recent: true,
             stats: false,
@@ -675,6 +715,7 @@ export function createLocalIndexServer (opts = {}) {
           },
           endpoints: {
             rank: '/rank',
+            rankStream: '/rank/stream',
             requests: '/requests',
             latest: '/latest.json',
             health: '/health.json',
@@ -683,6 +724,38 @@ export function createLocalIndexServer (opts = {}) {
           trackers: effectiveTrackers(),
           copy: {}
         })
+      }
+
+      if (req.method === 'GET' && parts.length === 1 && parts[0] === 'index.json') {
+        const indexPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../index.json')
+        if (fs.existsSync(indexPath)) {
+          const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || 'http'
+          const reqHost = String(req.headers['x-forwarded-host'] || req.headers.host || `${host}:${port}`).split(',')[0].trim()
+          const origin = `${proto}://${reqHost}`
+          const manifest = JSON.parse(fs.readFileSync(indexPath, 'utf8'))
+          const rewritten = manifest.map((entry) => ({
+            ...entry,
+            update: origin,
+            settings: Array.isArray(entry.settings)
+              ? entry.settings.map((s) => (s?.key === 'indexUrl' ? { ...s, default: origin, placeholder: origin } : s))
+              : entry.settings
+          }))
+          return sendJson(req, res, 200, rewritten)
+        }
+      }
+
+      if (req.method === 'GET' && parts.length === 2 && parts[0] === 'sources' && parts[1] === 'release-index.js') {
+        const bundlePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../sources/release-index.js')
+        if (fs.existsSync(bundlePath)) {
+          const js = fs.readFileSync(bundlePath)
+          res.writeHead(200, {
+            'content-type': 'application/javascript; charset=utf-8',
+            'cache-control': 'no-cache',
+            'access-control-allow-origin': '*',
+            'content-length': js.length
+          })
+          return res.end(js)
+        }
       }
 
       if (req.method === 'GET' && parts.length === 1 && parts[0] === 'latest.json') {
@@ -695,8 +768,11 @@ export function createLocalIndexServer (opts = {}) {
         const m = /^(\d+)\.(rank\.json|json)$/.exec(parts[3])
         if (Number.isSafeInteger(id) && id > 0 && m) {
           const ep = Number(m[1])
-          const cached = readCached(id, ep)
+          const cached = await readCached(id, ep)
           if (cached) return sendCached(req, res, cached)
+          if (url.searchParams.get('cachedOnly') === '1') {
+            return sendJson(req, res, 404, { error: 'cache miss', cachedOnly: true })
+          }
           if (!hasSources) return sendJson(req, res, 404, { error: 'no cached file yet and no sources configured' })
           const built = await buildEpisode(id, ep)
           if (built) return sendCached(req, res, built)
@@ -704,14 +780,62 @@ export function createLocalIndexServer (opts = {}) {
         }
       }
 
+      // Streaming ranked response (NDJSON): instant done on cache/seed hit, live progress + partial results on miss
+      if (req.method === 'POST' && parts.length === 2 && parts[0] === 'rank' && parts[1] === 'stream') {
+        const body = await readBody(req)
+        const id = Number(body?.anilistId)
+        const ep = Number(body?.episode) || 1
+        const resolution = body?.prefs?.resolution === '' ? '' : String(body?.prefs?.resolution || '1080')
+        const fresh = body?.fresh === true
+        if (!Number.isSafeInteger(id) || id <= 0) return sendJson(req, res, 400, { error: 'anilistId required' })
+        res.writeHead(200, {
+          'content-type': 'application/x-ndjson; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          'access-control-allow-origin': '*',
+          'access-control-allow-methods': 'GET, POST, OPTIONS',
+          'access-control-allow-headers': 'content-type',
+          'x-content-type-options': 'nosniff'
+        })
+        const writeLine = (obj) => {
+          if (!res.writableEnded && !res.destroyed) {
+            try { res.write(JSON.stringify(obj) + '\n') } catch {}
+          }
+        }
+        if (!fresh) {
+          const cached = await readCached(id, ep)
+          if (cached) {
+            writeLine({ type: 'done', list: JSON.parse(cached.json) })
+            return res.end()
+          }
+        }
+        if (!hasSources) {
+          writeLine({ type: 'error', error: 'no sources configured on local server' })
+          return res.end()
+        }
+        try {
+          const built = await buildEpisode(id, ep, {
+            media: body?.query?.media || null,
+            resolution,
+            fresh,
+            onProgress: (evt) => writeLine({ type: 'progress', ...evt }),
+            onPartial: (list) => writeLine({ type: 'partial', list })
+          })
+          if (built) writeLine({ type: 'done', list: JSON.parse(built.json) })
+          else writeLine({ type: 'error', error: 'no results' })
+        } catch (err) {
+          writeLine({ type: 'error', error: String(err?.message || err) })
+        }
+        return res.end()
+      }
+
       // On-demand ranked response (serves from cache in <5 ms when pre-built)
       if (req.method === 'POST' && parts.length === 1 && parts[0] === 'rank') {
         const body = await readBody(req)
         const id = Number(body?.anilistId)
         const ep = Number(body?.episode) || 1
-        const resolution = String(body?.prefs?.resolution || '1080')
+        const resolution = body?.prefs?.resolution === '' ? '' : String(body?.prefs?.resolution || '1080')
         if (!Number.isSafeInteger(id) || id <= 0) return sendJson(req, res, 400, { error: 'anilistId required' })
-        const cached = readCached(id, ep)
+        const cached = await readCached(id, ep)
         if (cached) return sendCached(req, res, cached)
         if (!hasSources) return sendJson(req, res, 404, { error: 'no sources configured on local server' })
         const built = await buildEpisode(id, ep, { resolution })
@@ -725,7 +849,7 @@ export function createLocalIndexServer (opts = {}) {
         const id = Number(body?.anilistId)
         const ep = Number(body?.episode) || 1
         if (!Number.isSafeInteger(id) || id <= 0) return sendJson(req, res, 400, { error: 'anilistId required' })
-        const cached = readCached(id, ep)
+        const cached = await readCached(id, ep)
         if (cached) return sendJson(req, res, 200, { cached: true, episode: JSON.parse(cached.json) })
         enqueue(id, ep)
         return sendJson(req, res, 202, { queued: true, retryAfterSeconds: 5, poll: `/anime/anilist/${id}/${ep}.rank.json`, queue: { position: queue.length, estimatedWaitSeconds: queue.length * 3 } })
@@ -734,7 +858,7 @@ export function createLocalIndexServer (opts = {}) {
       return sendJson(req, res, 404, {
         error: 'not found',
         mode: 'local-prebuilder',
-        routes: ['GET /health.json', 'GET /site.json', 'GET /latest.json', 'GET /anime/anilist/{id}/{ep}.rank.json', 'POST /rank', 'POST /requests']
+        routes: ['GET /health.json', 'GET /site.json', 'GET /latest.json', 'GET /anime/anilist/{id}/{ep}.rank.json', 'POST /rank', 'POST /rank/stream', 'POST /requests']
       })
     } catch (err) {
       return sendJson(req, res, 500, { error: String(err?.message || err) })

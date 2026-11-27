@@ -24,7 +24,8 @@ const workerShimsPlugin = {
     b.onResolve({ filter: /^anitomyscript$/ }, () => ({ path: path.join(SHIMS, 'anitomyscript.js') }))
     b.onResolve({ filter: /^debug$/ }, () => ({ path: path.join(SHIMS, 'debug.js') }))
     b.onResolve({ filter: /^(parse-torrent|bencode|uint8-util)$/ }, () => ({ path: path.join(SHIMS, 'noop.js') }))
-    b.onResolve({ filter: /^@\/modules\/bridge\.js$/ }, () => ({ path: path.join(SHIMS, 'noop.js') }))
+    b.onResolve({ filter: /^@\/modules\/bridge\.js$/ }, () => ({ path: path.join(SHIMS, 'bridge.js') }))
+    b.onResolve({ filter: /^@\/modules\/anime\/seadex\.js$/ }, () => ({ path: path.join(SHIMS, 'seadex.js') }))
     b.onResolve({ filter: /^@\/modules\/util\.js$/ }, () => ({ path: path.join(SHIMS, 'util.js') }))
     b.onResolve({ filter: /^@\/modules\/settings\.js$/ }, () => ({ path: path.join(SHIMS, 'seasonalSettings.js') }))
     b.onResolve({ filter: /^@\// }, (args) => ({ path: path.join(VENDOR_COMMON, args.path.slice(2)) }))
@@ -58,6 +59,10 @@ const ctx = await context({
   format: 'esm',
   platform: 'browser',
   target: ['es2022'],
+  define: {
+    'process.env': '{}',
+    process: 'undefined'
+  },
   minifySyntax: true,
   minifyWhitespace: true,
   keepNames: true,

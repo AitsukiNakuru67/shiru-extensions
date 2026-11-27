@@ -125,6 +125,12 @@ test('on-device local matcher: parses RSS/Torznab feed, rejects wrong episode, c
     assert.ok(!recHashes.includes(hWrongEp), 'wrong episode (ep 2) is excluded from recommended')
     assert.equal(res.sections.recommended[0].hash, hBest, 'SubsPlease 1080p leads recommended')
     assert.equal(res.sections.recommended[0].cardType, 'best', 'top row is crowned Best')
+    assert.equal(res.sections.recommended[0].groupName, 'SubsPlease', 'groupName parsed via parseSourceResults (not dash/No Group)')
+    assert.equal(res.sections.recommended[0].group, 'SubsPlease', 'group field populated')
+    assert.equal(res.sections.recommended[0].trustedBy, 'tracker', 'trustedBy populated for Nyaa trusted row')
+    assert.ok(!res.sections.recommended[0].displayName.includes('[SubsPlease]'), 'displayName simplifies away release group bracket')
+    assert.ok(!res.sections.recommended[0].displayName.includes('1080p'), 'displayName simplifies away resolution token')
+    assert.ok(res.sections.recommended[0].terms.some((t) => t.text === '1080p'), '1080p resolution chip populated in terms')
     assert.equal(res.autoplay, res.sections.recommended[0].key, 'autoplay points to Best row')
     assert.ok(res.sections.foreign.some((r) => r.hash === hForeign), 'Spanish-subbed release is placed in foreign')
     assert.ok(res.sections.unseeded.some((r) => r.hash === hDead), '0-seeder release is placed in unseeded')
@@ -464,6 +470,94 @@ test('Usenet crawlers (Binsearch / NZBKing / NZBIndex), key-gated ameNZB with ap
     const ameRow = rWithKey.sections.usenet.find((r) => r.host === 'amenzb')
     assert.ok(ameRow, 'ameNZB NZB surfaced in sections.usenet')
     assert.ok(!JSON.stringify(rWithKey).includes(secretKey), 'ameNZB API key is stripped from all returned rows')
+  } finally {
+    globalThis.fetch = origFetch
+  }
+})
+
+test('streaming results + approximate progress: emits Phase 1 partial list before slow Nyaa host completes', async () => {
+  const hFast = HEX('1')
+  const hSlow = HEX('2')
+  const manifest = {
+    schemaVersion: 1,
+    indexUrl: '',
+    trackers: [],
+    sources: [
+      { id: 'animetosho', format: 'animetosho-json', scope: 'sfw', enabled: true, url: 'https://stream-tosho.example.test/json?eid={anidbEid}' },
+      { id: 'nyaa-en', format: 'rss', scope: 'sfw', enabled: true, url: 'https://stream-nyaa.example.test/?page=rss&c=1_2&q={orQuery}' }
+    ]
+  }
+  const origFetch = globalThis.fetch
+  let nyaaFinished = false
+  globalThis.fetch = async (url) => {
+    const u = String(url)
+    if (u.startsWith('https://stream-manifest.example.test/sources.json')) {
+      return new Response(JSON.stringify(manifest), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.startsWith('https://stream-tosho.example.test/json')) {
+      return new Response(JSON.stringify([{
+        title: '[SubsPlease] Sousou no Frieren - 01 (1080p) [11111111].mkv',
+        info_hash: hFast,
+        total_size: 1450000000,
+        seeders: 110,
+        timestamp: 1696000000,
+        website_url: 'https://stream-tosho.example.test/view/1'
+      }]), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.startsWith('https://stream-tosho.example.test/api')) {
+      return new Response('<rss><channel></channel></rss>', { status: 200, headers: { 'content-type': 'application/xml' } })
+    }
+    if (u.startsWith('https://stream-nyaa.example.test/')) {
+      await new Promise((r) => setTimeout(r, 150))
+      nyaaFinished = true
+      return new Response(`<rss version="2.0" xmlns:nyaa="https://nyaa.si/xmlns/nyaa"><channel>
+        <item><title>[Erai-raws] Sousou no Frieren - 01 [1080p][Multiple Subtitle].mkv</title><nyaa:infoHash>${hSlow}</nyaa:infoHash><nyaa:seeders>75</nyaa:seeders><nyaa:size>1.4 GiB</nyaa:size><nyaa:trusted>Yes</nyaa:trusted><nyaa:categoryId>1_2</nyaa:categoryId></item>
+      </channel></rss>`, { status: 200, headers: { 'content-type': 'application/xml' } })
+    }
+    return new Response('', { status: 404 })
+  }
+
+  const progressEvents = []
+  const partialEvents = []
+  let partialBeforeNyaa = false
+  try {
+    ext.settings = { indexUrl: '', sourcesUrl: 'https://stream-manifest.example.test/sources.json', feedUrls: '', useAnizip: false, enableUsenet: false }
+    const finalRes = await ext.list({
+      anilistId: 154587,
+      episode: 1,
+      episodeCount: 28,
+      anidbEid: 283115,
+      resolution: '1080',
+      titles: ['Sousou no Frieren'],
+      media: {
+        id: 154587,
+        idMal: 52991,
+        episodes: 28,
+        format: 'TV',
+        status: 'FINISHED',
+        genres: ['Adventure', 'Fantasy'],
+        title: { romaji: 'Sousou no Frieren', english: "Frieren: Beyond Journey's End", native: '葬送のフリーレン', userPreferred: 'Sousou no Frieren' },
+        synonyms: [],
+        relations: { edges: [] }
+      }
+    }, {
+      fresh: true,
+      onProgress: (evt) => progressEvents.push(evt),
+      onPartial: (list) => {
+        if (!nyaaFinished) partialBeforeNyaa = true
+        partialEvents.push(list)
+      }
+    })
+
+    assert.ok(progressEvents.length >= 3, `expected multiple progress events, got ${progressEvents.length}`)
+    for (let i = 1; i < progressEvents.length; i++) {
+      assert.ok(progressEvents[i].progress >= progressEvents[i - 1].progress, 'progress is monotonic')
+    }
+    assert.equal(progressEvents.at(-1).progress, 1, 'final progress reaches 1')
+    assert.ok(partialEvents.length >= 1, 'emitted at least one partial ranked list')
+    assert.equal(partialBeforeNyaa, true, 'Phase 1 partial list arrived BEFORE slow Nyaa finished')
+    assert.ok(partialEvents[0].sections.recommended.some((r) => r.hash === hFast && r.groupName === 'SubsPlease'), 'partial list has properly formatted SubsPlease card')
+    assert.ok(finalRes.sections.recommended.some((r) => r.hash === hSlow && r.groupName === 'Erai-raws'), 'final list includes slow Nyaa Erai-raws card')
   } finally {
     globalThis.fetch = origFetch
   }

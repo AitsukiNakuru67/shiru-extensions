@@ -277,11 +277,13 @@ function seedRowToRankRow (row, idx, winnerHash, trackers = []) {
   const title = String(row?.name || row?.title || '')
   const kind = row?.kind === 'nzb' || (!validHash && row?.nzbUrl) ? 'nzb' : 'torrent'
   const isWinner = (winnerHash && validHash && validHash === winnerHash) || (!winnerHash && idx === 0 && kind !== 'nzb')
-  const cardType = isWinner ? 'best' : 'default'
+  const isSeadex = row?.seadex === true
+  const isSeadexBest = row?.seadexBest === true
+  const cardType = isWinner && !isSeadex ? 'best' : 'default'
   const key = validHash ? `${kind}:${validHash}` : `${kind}:${title.toLowerCase().slice(0, 80)}`
   const rawLink = row?.link || (validHash ? `magnet:?xt=urn:btih:${validHash}&dn=${encodeURIComponent(title)}` : '')
   const link = appendTrackers(rawLink, trackers)
-  const group = /^\[([^\]]+)\]/.exec(title)?.[1] || ''
+  const group = String(row?.group || /^\[([^\]]+)\]/.exec(title)?.[1] || '')
   const seeders = Number.isSafeInteger(row?.seeders) ? row.seeders : null
   const downloads = Number.isSafeInteger(row?.downloads) ? row.downloads : null
   const size = Number(row?.size) > 0 ? Number(row.size) : null
@@ -306,9 +308,9 @@ function seedRowToRankRow (row, idx, winnerHash, trackers = []) {
     uploaded,
     group,
     groupName: group,
-    type: isWinner ? 'best' : null,
+    type: isWinner && !isSeadex ? 'best' : 'alt',
     cardType,
-    crown: isWinner ? 'best' : (row?.seadexBest ? 'curatedBest' : null),
+    crown: isSeadexBest ? 'curatedBest' : (isWinner && !isSeadex ? 'best' : null),
     ladderSection: null,
     sectionLabel: null,
     labels: [],
@@ -383,19 +385,74 @@ export function openSeedStore (seedDir) {
 
   function getRankPayload (anilistId, episode, { trackers = [] } = {}) {
     const rec = readRawRecord(anilistId, episode)
-    if (!rec || !Array.isArray(rec.rows) || rec.rows.length === 0) return null
+    if (!rec) return null
+    const baseRows = Array.isArray(rec.rows) ? rec.rows : []
+    const pickRanked = Array.isArray(rec.answer?.pick?.ranked) ? rec.answer.pick.ranked : []
+    if (!baseRows.length && !pickRanked.length) return null
+
+    // Merge verified delivered rows (`rec.rows`: size, nyaa id, uploaded, seadexBest) with
+    // the full ranked pool (`rec.answer.pick.ranked`: seeders, trusted, seadex, group, ladderSection).
+    const byHash = new Map()
+    const merged = []
+    for (const r of baseRows) {
+      if (!r) continue
+      const h = String(r.btih || r.hash || '').toLowerCase()
+      const copy = { ...r }
+      if (HEX40.test(h)) byHash.set(h, copy)
+      merged.push(copy)
+    }
+    for (const r of pickRanked) {
+      if (!r) continue
+      const h = String(r.hash || r.btih || '').toLowerCase()
+      const existing = HEX40.test(h) ? byHash.get(h) : null
+      if (existing) {
+        if (existing.seeders == null && Number.isSafeInteger(r.seeders)) existing.seeders = r.seeders
+        if (r.trusted === true) existing.trusted = true
+        if (r.seadex === true) existing.seadex = true
+        if (r.group && !existing.group) existing.group = r.group
+        if (r.ladderSection && !existing.ladderSection) existing.ladderSection = r.ladderSection
+        if (!existing.name && r.title) existing.name = r.title
+      } else {
+        const entry = {
+          btih: HEX40.test(h) ? h : '',
+          name: String(r.title || r.name || ''),
+          group: String(r.group || ''),
+          seeders: Number.isSafeInteger(r.seeders) ? r.seeders : null,
+          trusted: r.trusted === true,
+          seadex: r.seadex === true,
+          seadexBest: r.seadexBest === true,
+          kind: r.kind === 'nzb' ? 'nzb' : 'torrent',
+          ladderSection: r.ladderSection || null,
+          size: Number(r.size) > 0 ? Number(r.size) : null
+        }
+        if (HEX40.test(h)) byHash.set(h, entry)
+        merged.push(entry)
+      }
+    }
+
     const winnerHash = String(rec.answer?.pick?.winner?.hash || '').toLowerCase()
-    const mapped = rec.rows.map((r, i) => seedRowToRankRow(r, i, winnerHash, trackers))
+    const mapped = merged.map((r, i) => seedRowToRankRow(r, i, winnerHash, trackers))
     const torrents = mapped.filter((r) => r.kind !== 'nzb')
     const usenet = mapped.filter((r) => r.kind === 'nzb')
-    // Ensure winner/best leads recommended
-    torrents.sort((a, b) => (a.cardType === 'best' ? -1 : b.cardType === 'best' ? 1 : 0))
+    // Ensure winner / Curated Best leads recommended, and crown top non-curated alive torrent as Best (R259)
+    const leadScore = (r) => (r.hash === winnerHash ? 3 : r.seadexBest ? 2 : r.cardType === 'best' ? 1 : 0)
+    torrents.sort((a, b) => leadScore(b) - leadScore(a))
     const unseeded = torrents.filter((r) => r.seeders === 0)
     const recommended = torrents.filter((r) => r.seeders !== 0)
+    if (!recommended.some((r) => r.type === 'best')) {
+      const topNonCurated = recommended.find((r) => !r.seadex)
+      if (topNonCurated) {
+        topNonCurated.type = 'best'
+        topNonCurated.cardType = 'best'
+        topNonCurated.crown = 'best'
+      }
+    }
     const autoplayRow = recommended[0] || torrents[0] || null
 
     return {
       source: 'seed',
+      anilistId,
+      episode,
       seededAt: rec.at || meta?.generatedAt || null,
       sections: {
         recommended,

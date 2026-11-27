@@ -19,6 +19,7 @@ const defaultCtx = {
   fresh: false,
   enableUsenet: true,
   amenzbKey: '',
+  onItems: null,
   hosts: {
     seadexTemplate: '',
     animetoshoOrigin: '',
@@ -36,6 +37,25 @@ const defaultCtx = {
 }
 
 let activeCtx = structuredClone(defaultCtx)
+const itemsListeners = new Set()
+
+export function addCascadeItemsListener (fn) {
+  if (typeof fn === 'function') itemsListeners.add(fn)
+}
+
+export function removeCascadeItemsListener (fn) {
+  if (typeof fn === 'function') itemsListeners.delete(fn)
+}
+
+function notifyTransportItems (host, items) {
+  if (!Array.isArray(items) || !items.length) return
+  if (typeof activeCtx.onItems === 'function') {
+    try { activeCtx.onItems(host, items) } catch {}
+  }
+  for (const fn of itemsListeners) {
+    try { fn(host, items) } catch {}
+  }
+}
 
 function originOf (url) {
   try {
@@ -124,6 +144,7 @@ export function setCascadeTransportContext (ctx) {
     fresh: ctx?.fresh === true,
     enableUsenet: ctx?.enableUsenet !== false,
     amenzbKey: String(ctx?.amenzbKey || '').trim(),
+    onItems: typeof ctx?.onItems === 'function' ? ctx.onItems : null,
     hosts: { ...defaultCtx.hosts, ...(ctx?.hosts || {}) }
   }
 }
@@ -177,7 +198,9 @@ export const CASCADE_SEASONAL = {
     })
     if (!res.ok) return { ok: false, error: res.error, items: [] }
     const host = isSukebei ? 'sukebei' : 'nyaa'
-    return { ok: true, items: parseFeedXml(res.text, url, host) }
+    const items = parseFeedXml(res.text, url, host)
+    notifyTransportItems(host, items)
+    return { ok: true, items }
   },
 
   async searchNyaaTop (q, opts = {}) {
@@ -204,7 +227,9 @@ export const CASCADE_SEASONAL = {
     })
     if (!res.ok) return { ok: false, error: res.error, items: [] }
     const host = isSukebei ? 'sukebei' : 'nyaa'
-    return { ok: true, items: parseNyaaHtml(res.text, { host, origin }) }
+    const items = parseNyaaHtml(res.text, { host, origin })
+    notifyTransportItems(host, items)
+    return { ok: true, items }
   },
 
   async searchAnimetosho (opts = {}) {
@@ -226,6 +251,7 @@ export const CASCADE_SEASONAL = {
       })
       if (!res.ok) return { ok: false, error: res.error, items: [] }
       const items = parseFeedXml(res.text, url, 'animetosho').map((it) => ({ ...it, animetoshoListed: true }))
+      notifyTransportItems('animetosho', items)
       return { ok: true, items }
     }
 
@@ -264,6 +290,7 @@ export const CASCADE_SEASONAL = {
       nyaaOrigin: hosts.nyaaOrigin,
       sukebeiOrigin: hosts.sukebeiOrigin
     })
+    notifyTransportItems('animetosho', items)
     const learnedAid = opts?.title ? dominantAid(items) : null
     return { ok: true, items, ...(learnedAid ? { anidbAid: learnedAid } : {}) }
   },

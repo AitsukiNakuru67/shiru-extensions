@@ -195,9 +195,24 @@ test('seed importer & local-index: downloads .tar.zst, verifies SHA-256, indexes
     const body = await res.json()
     assert.equal(body.sections.recommended.length, 2)
     assert.equal(body.sections.recommended[0].hash, hWinner, 'winner from seed leads recommended')
-    assert.equal(body.sections.recommended[0].cardType, 'best')
     assert.equal(body.sections.recommended[0].seadexBest, true)
+    assert.equal(body.sections.recommended[0].crown, 'curatedBest', 'curated winner gets Curated Best crown without colliding Best badge')
+    assert.ok(body.sections.recommended[0].labels.some((l) => l.text === 'Curated Best'), 'curated winner has Curated Best chip')
+    assert.equal(body.sections.recommended[1].cardType, 'best', 'top non-curated row gets Best badge (R259)')
+    assert.equal(body.sections.recommended[0].groupName, 'Judas', 'seeded row formatted with real groupName')
+    assert.ok(body.sections.recommended[0].terms.some((t) => t.text === '1080p'), 'seeded row formatted with resolution chip')
     assert.ok(body.sections.recommended[0].link.includes(encodeURIComponent('http://tracker.example.test:7777/announce')), 'seeded magnet link includes manifest trackers')
+
+    // Streaming endpoint returns instant done on seed hit
+    const streamRes = await fetch(`http://127.0.0.1:${port}/rank/stream`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ anilistId: 1, episode: 1 })
+    })
+    assert.equal(streamRes.status, 200)
+    const lines = (await streamRes.text()).trim().split('\n').map((l) => JSON.parse(l))
+    assert.equal(lines.at(-1).type, 'done')
+    assert.equal(lines.at(-1).list.sections.recommended[0].hash, hWinner)
 
     const health = await (await fetch(`http://127.0.0.1:${port}/health.json`)).json()
     assert.equal(health.seedReady, true)

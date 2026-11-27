@@ -2,7 +2,7 @@
   {
     "id": "release-index",
     "name": "Release Matcher",
-    "version": "0.5.0",
+    "version": "0.6.0",
     "main": "sources/release-index.js",
     "update": "gh:AitsukiNakuru67/shiru-extensions",
     "type": "torrent",
