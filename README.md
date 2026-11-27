@@ -6,8 +6,12 @@ Standalone structured-list extension repository and optional self-hosted pre-bui
 
 | Mode | Speed | Setup | Best For |
 | --- | --- | --- | --- |
-| **1. On-Device Live Mode** (`Feed URLs`) | ~2–5 s cold search | Paste feed URLs in Extension Settings — no server needed | General users who want zero hosting |
+| **1. On-Device Live Mode** (`Sources Manifest URL` / `Feed URLs`) | ~2–6 s cold search | Works out of the box via the permanent Sources Manifest — no server needed | General users who want zero hosting |
 | **2. Self-Hosted Pre-Builder Mode** (`Release Index URL`) | **< 5 ms** (pre-built ahead of time) | Run `node server/local-index.mjs` or `docker compose up -d` | Instant episode loading on your PC, NAS, or VPS |
+
+## Sanitized Seed Snapshot
+
+A stripped, public-only seed archive (`seed.tar.zst`, ~180 MB) with verified episode answers, listings, and tracker counts — with all private/Usenet/proxy/server state removed — is available at a permanent download link. See **[SEED.md](SEED.md)** for the direct link, SHA-256 checksum, and extraction commands.
 
 ## Install in Shiru
 

@@ -66,6 +66,15 @@ You can connect either way:
 
 ---
 
+## Pre-Populated Sanitized Seed Snapshot
+
+Want to bootstrap a full self-hosted dataset without crawling from scratch? Download the latest sanitized public seed archive (all private/Usenet/egress state stripped) from the permanent link documented in **[SEED.md](../SEED.md)**:
+
+- Archive: `https://pixeldrain.com/api/filesystem/qkW71xWE/seed.tar.zst`
+- Metadata + SHA-256: `https://pixeldrain.com/api/filesystem/qkW71xWE/seed.json`
+
+---
+
 ## Environment Variables Reference
 
 | Variable | Default | Description |
