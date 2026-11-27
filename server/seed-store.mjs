@@ -1,0 +1,416 @@
+/**
+ * Sanitized Pixeldrain seed importer and O(1) byte-offset lookup store for `local-index.mjs`.
+ * Pure Node.js 22+ (uses native `zlib.createZstdDecompress` and a streaming USTAR/PAX tar reader —
+ * zero native binaries or extra npm dependencies required).
+ */
+import fs from 'node:fs'
+import path from 'node:path'
+import zlib from 'node:zlib'
+import crypto from 'node:crypto'
+import { Readable } from 'node:stream'
+
+export const DEFAULT_SEED_URL = 'https://pixeldrain.com/api/filesystem/qkW71xWE/seed.tar.zst'
+export const DEFAULT_SEED_META_URL = 'https://pixeldrain.com/api/filesystem/qkW71xWE/seed.json'
+
+const HEX40 = /^[0-9a-f]{40}$/i
+const ANSWERS_REL = 'live/serve/live/episode-answers.jsonl'
+
+/**
+ * Minimal pure-JS streaming POSIX/USTAR/GNU/PAX tar extractor.
+ * Extracts only paths matching `wanted` (Set of normalized relative paths) into `outDir`.
+ */
+export async function extractTarStream (stream, outDir, wanted = new Set([ANSWERS_REL])) {
+  let buf = Buffer.alloc(0)
+  let currentFile = null
+  let remaining = 0
+  let pad = 0
+  let nextLongName = null
+  let nextPaxPath = null
+  const extracted = []
+
+  const normalizeRel = (p) => String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '')
+
+  const openTarget = (rel) => {
+    const dest = path.join(outDir, ...rel.split('/'))
+    fs.mkdirSync(path.dirname(dest), { recursive: true })
+    const tmp = `${dest}.tmp.${process.pid}`
+    return { rel, dest, tmp, ws: fs.createWriteStream(tmp) }
+  }
+
+  const closeTarget = async (target) => {
+    if (!target) return
+    await new Promise((resolve, reject) => {
+      target.ws.on('error', reject)
+      target.ws.end(resolve)
+    })
+    fs.renameSync(target.tmp, target.dest)
+    extracted.push(target.rel)
+  }
+
+  for await (const chunk of stream) {
+    buf = buf.length ? Buffer.concat([buf, chunk]) : chunk
+
+    while (buf.length > 0) {
+      if (remaining > 0) {
+        const take = Math.min(remaining, buf.length)
+        const slice = buf.subarray(0, take)
+        buf = buf.subarray(take)
+        remaining -= take
+        if (currentFile?.kind === 'file') {
+          if (!currentFile.ws.write(slice)) {
+            await new Promise((r) => currentFile.ws.once('drain', r))
+          }
+        } else if (currentFile?.kind === 'meta') {
+          currentFile.chunks.push(Buffer.from(slice))
+        }
+        if (remaining === 0) {
+          if (currentFile?.kind === 'file') {
+            await closeTarget(currentFile)
+          } else if (currentFile?.kind === 'meta') {
+            const raw = Buffer.concat(currentFile.chunks).toString('utf8')
+            if (currentFile.type === 'L') {
+              nextLongName = raw.replace(/\0+$/, '')
+            } else if (currentFile.type === 'x') {
+              const m = /\d+ path=([^\n]+)\n/.exec(raw)
+              if (m) nextPaxPath = m[1]
+            }
+          }
+          currentFile = null
+        }
+        continue
+      }
+
+      if (pad > 0) {
+        if (buf.length < pad) break
+        buf = buf.subarray(pad)
+        pad = 0
+        continue
+      }
+
+      if (buf.length < 512) break
+      const header = buf.subarray(0, 512)
+      buf = buf.subarray(512)
+
+      // Two 512-byte zero blocks mark end-of-archive.
+      let allZero = true
+      for (let i = 0; i < 512; i++) {
+        if (header[i] !== 0) { allZero = false; break }
+      }
+      if (allZero) continue
+
+      const typeByte = header[156]
+      const type = typeByte === 0 ? '0' : String.fromCharCode(typeByte)
+      const sizeStr = header.subarray(124, 136).toString('ascii').replace(/\0.*$/, '').trim()
+      const size = sizeStr ? parseInt(sizeStr, 8) : 0
+      const nameRaw = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '')
+      const prefixRaw = header.subarray(345, 500).toString('utf8').replace(/\0.*$/, '')
+      const defaultName = prefixRaw ? `${prefixRaw}/${nameRaw}` : nameRaw
+      const rel = normalizeRel(nextPaxPath || nextLongName || defaultName)
+
+      if (type === 'L' || type === 'x') {
+        currentFile = { kind: 'meta', type, chunks: [] }
+        remaining = size
+        pad = (512 - (size % 512)) % 512
+        continue
+      }
+
+      nextLongName = null
+      nextPaxPath = null
+
+      if ((type === '0' || type === '\0') && wanted.has(rel)) {
+        const target = openTarget(rel)
+        currentFile = { kind: 'file', ...target }
+        if (size === 0) {
+          await closeTarget(target)
+          currentFile = null
+        }
+      } else {
+        currentFile = null
+      }
+      remaining = size
+      pad = (512 - (size % 512)) % 512
+    }
+  }
+
+  return extracted
+}
+
+/**
+ * Scan `episode-answers.jsonl` in one streaming pass and write an O(1) byte-offset index:
+ * `{ "<anilistId>:<episode>": [offset, byteLength] }` (latest record with rows wins).
+ */
+export async function buildAnswersIndex (answersPath, indexPath) {
+  const map = Object.create(null)
+  const hasRows = new Set()
+  let offset = 0
+  let leftover = Buffer.alloc(0)
+  let lines = 0
+
+  const indexLine = (lineBuf, lineOffset) => {
+    if (!lineBuf.length) return
+    lines++
+    // Fast header scan on the first 256 bytes avoids JSON.parse of 400 MB on startup/import.
+    const head = lineBuf.subarray(0, Math.min(256, lineBuf.length)).toString('utf8')
+    const idM = /"anilistId":(\d+)/.exec(head)
+    const epM = /"episode":(\d+)/.exec(head)
+    if (!idM || !epM) return
+    const key = `${idM[1]}:${epM[1]}`
+    const emptyRows = head.includes('"rows":[]')
+    // Prefer a record with non-empty rows over an empty one; otherwise keep the newest line.
+    if (!emptyRows || !hasRows.has(key)) {
+      map[key] = [lineOffset, lineBuf.length]
+      if (!emptyRows) hasRows.add(key)
+    }
+  }
+
+  for await (const chunk of fs.createReadStream(answersPath, { highWaterMark: 1024 * 1024 })) {
+    const combined = leftover.length ? Buffer.concat([leftover, chunk]) : chunk
+    let start = 0
+    while (true) {
+      const nl = combined.indexOf(10, start)
+      if (nl < 0) break
+      let end = nl
+      if (end > start && combined[end - 1] === 13) end--
+      indexLine(combined.subarray(start, end), offset + start)
+      start = nl + 1
+    }
+    offset += start
+    leftover = start < combined.length ? Buffer.from(combined.subarray(start)) : Buffer.alloc(0)
+  }
+  if (leftover.length) indexLine(leftover, offset)
+
+  const keys = Object.keys(map)
+  const tmp = `${indexPath}.tmp.${process.pid}`
+  fs.mkdirSync(path.dirname(indexPath), { recursive: true })
+  fs.writeFileSync(tmp, JSON.stringify(map))
+  fs.renameSync(tmp, indexPath)
+  return { lines, episodesIndexed: keys.length, withRows: hasRows.size }
+}
+
+/**
+ * Download, verify, extract, and index the sanitized seed snapshot into `seedDir`.
+ */
+export async function importSeed ({
+  seedUrl = DEFAULT_SEED_URL,
+  seedMetaUrl = DEFAULT_SEED_META_URL,
+  seedDir,
+  force = false,
+  fetchImpl = fetch,
+  log = (...a) => console.log('[seed-import]', ...a)
+} = {}) {
+  const dir = path.resolve(seedDir)
+  fs.mkdirSync(dir, { recursive: true })
+  const metaFile = path.join(dir, 'seed-meta.json')
+  const indexFile = path.join(dir, 'answers.idx.json')
+  const answersFile = path.join(dir, ...ANSWERS_REL.split('/'))
+
+  let remoteMeta = null
+  if (seedMetaUrl) {
+    try {
+      const r = await fetchImpl(seedMetaUrl, { signal: AbortSignal.timeout(15000) })
+      if (r.ok) remoteMeta = await r.json()
+    } catch {}
+  }
+
+  if (!force && fs.existsSync(metaFile) && fs.existsSync(indexFile) && fs.existsSync(answersFile)) {
+    try {
+      const localMeta = JSON.parse(fs.readFileSync(metaFile, 'utf8'))
+      if (!remoteMeta?.sha256 || localMeta?.sha256 === remoteMeta.sha256) {
+        return { skipped: true, alreadyUpToDate: true, ...localMeta }
+      }
+    } catch {}
+  }
+
+  const t0 = Date.now()
+  log(`downloading seed from ${seedUrl} ...`)
+  const res = await fetchImpl(seedUrl, { signal: AbortSignal.timeout(1800_000) })
+  if (!res.ok || !res.body) throw new Error(`Seed download failed: HTTP ${res.status}`)
+
+  const hash = crypto.createHash('sha256')
+  let bytes = 0
+  const nodeStream = Readable.fromWeb(res.body)
+  nodeStream.on('data', (chunk) => {
+    bytes += chunk.length
+    hash.update(chunk)
+  })
+
+  const zstd = zlib.createZstdDecompress()
+  const extracted = await extractTarStream(nodeStream.pipe(zstd), dir, new Set([ANSWERS_REL]))
+  const sha256 = hash.digest('hex')
+
+  if (remoteMeta?.sha256 && remoteMeta.sha256 !== sha256) {
+    throw new Error(`Seed SHA-256 mismatch: expected ${remoteMeta.sha256}, got ${sha256}`)
+  }
+  if (!extracted.includes(ANSWERS_REL) || !fs.existsSync(answersFile)) {
+    throw new Error(`Seed archive did not contain ${ANSWERS_REL}`)
+  }
+
+  log(`extracted ${(bytes / (1024 * 1024)).toFixed(1)} MB (${sha256.slice(0, 12)}), indexing episodes ...`)
+  const idx = await buildAnswersIndex(answersFile, indexFile)
+  const meta = {
+    seedUrl,
+    sha256,
+    bytes,
+    generatedAt: remoteMeta?.generatedAt || null,
+    importedAt: new Date().toISOString(),
+    elapsedSec: Math.round((Date.now() - t0) / 1000),
+    ...idx
+  }
+  fs.writeFileSync(metaFile, JSON.stringify(meta, null, 2) + '\n')
+  log(`ready: ${idx.episodesIndexed} episodes indexed (${idx.withRows} with rows) in ${meta.elapsedSec}s`)
+  return { skipped: false, ...meta }
+}
+
+function seedRowToRankRow (row, idx, winnerHash) {
+  const hash = String(row?.btih || row?.hash || '').toLowerCase()
+  const validHash = HEX40.test(hash) ? hash : ''
+  const title = String(row?.name || row?.title || '')
+  const kind = row?.kind === 'nzb' || (!validHash && row?.nzbUrl) ? 'nzb' : 'torrent'
+  const isWinner = (winnerHash && validHash && validHash === winnerHash) || (!winnerHash && idx === 0 && kind !== 'nzb')
+  const cardType = isWinner ? 'best' : 'default'
+  const key = validHash ? `${kind}:${validHash}` : `${kind}:${title.toLowerCase().slice(0, 80)}`
+  const link = row?.link || (validHash ? `magnet:?xt=urn:btih:${validHash}&dn=${encodeURIComponent(title)}` : '')
+  const group = /^\[([^\]]+)\]/.exec(title)?.[1] || ''
+  const seeders = Number.isSafeInteger(row?.seeders) ? row.seeders : null
+  const downloads = Number.isSafeInteger(row?.downloads) ? row.downloads : null
+  const size = Number(row?.size) > 0 ? Number(row.size) : null
+  const uploaded = typeof row?.uploaded === 'string' && row.uploaded ? row.uploaded : null
+  const pageUrl = row?.pageUrl || (Number.isSafeInteger(row?.nyaa) && row.nyaa > 0 ? `https://nyaa.si/view/${row.nyaa}` : '')
+
+  return {
+    key,
+    copyKey: null,
+    hash: validHash,
+    kind,
+    title,
+    displayName: title,
+    link,
+    nzbUrl: String(row?.nzbUrl || ''),
+    pageUrl,
+    host: String(row?.host || (row?.nyaa ? 'nyaa' : 'seed')),
+    size,
+    episodesCovered: 1,
+    seeders,
+    downloads,
+    uploaded,
+    group,
+    groupName: group,
+    type: isWinner ? 'best' : null,
+    cardType,
+    crown: isWinner ? 'best' : (row?.seadexBest ? 'curatedBest' : null),
+    ladderSection: null,
+    sectionLabel: null,
+    labels: [],
+    terms: [],
+    packSize: null,
+    seedTier: null,
+    showSeeders: seeders != null,
+    scoreBreakdown: null,
+    seadex: row?.seadex === true,
+    seadexBest: row?.seadexBest === true,
+    trusted: row?.trusted === true || row?.nyaaTrusted === true,
+    trustedBy: null,
+    remake: row?.remake === true,
+    rawDisc: false,
+    possibleReason: null,
+    language: null,
+    adult: false
+  }
+}
+
+/**
+ * Open an indexed seed directory for sub-millisecond `(anilistId, episode)` lookups.
+ */
+export function openSeedStore (seedDir) {
+  const dir = path.resolve(seedDir)
+  const indexFile = path.join(dir, 'answers.idx.json')
+  const answersFile = path.join(dir, ...ANSWERS_REL.split('/'))
+  const metaFile = path.join(dir, 'seed-meta.json')
+
+  let index = null
+  let fd = null
+  let meta = null
+
+  function load () {
+    close()
+    if (!fs.existsSync(indexFile) || !fs.existsSync(answersFile)) return false
+    try {
+      const parsed = JSON.parse(fs.readFileSync(indexFile, 'utf8'))
+      index = new Map(Object.entries(parsed))
+      fd = fs.openSync(answersFile, 'r')
+      if (fs.existsSync(metaFile)) meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'))
+      return true
+    } catch {
+      close()
+      return false
+    }
+  }
+
+  function close () {
+    if (fd != null) {
+      try { fs.closeSync(fd) } catch {}
+      fd = null
+    }
+    index = null
+  }
+
+  function readRawRecord (anilistId, episode) {
+    if (!index || fd == null) return null
+    const loc = index.get(`${anilistId}:${episode}`)
+    if (!loc) return null
+    const [offset, length] = loc
+    if (!(length > 0)) return null
+    const buf = Buffer.allocUnsafe(length)
+    const n = fs.readSync(fd, buf, 0, length, offset)
+    if (n !== length) return null
+    try {
+      return JSON.parse(buf.toString('utf8'))
+    } catch {
+      return null
+    }
+  }
+
+  function getRankPayload (anilistId, episode) {
+    const rec = readRawRecord(anilistId, episode)
+    if (!rec || !Array.isArray(rec.rows) || rec.rows.length === 0) return null
+    const winnerHash = String(rec.answer?.pick?.winner?.hash || '').toLowerCase()
+    const mapped = rec.rows.map((r, i) => seedRowToRankRow(r, i, winnerHash))
+    const torrents = mapped.filter((r) => r.kind !== 'nzb')
+    const usenet = mapped.filter((r) => r.kind === 'nzb')
+    // Ensure winner/best leads recommended
+    torrents.sort((a, b) => (a.cardType === 'best' ? -1 : b.cardType === 'best' ? 1 : 0))
+    const unseeded = torrents.filter((r) => r.seeders === 0)
+    const recommended = torrents.filter((r) => r.seeders !== 0)
+    const autoplayRow = recommended[0] || torrents[0] || null
+
+    return {
+      source: 'seed',
+      seededAt: rec.at || meta?.generatedAt || null,
+      sections: {
+        recommended,
+        unconfirmed: [],
+        usenet,
+        private: [],
+        foreign: [],
+        possible: [],
+        unseeded,
+        raw: mapped
+      },
+      autoplay: autoplayRow?.key || null,
+      hiddenRevisions: 0,
+      resolution: { relaxed: false, matched: recommended.length, wanted: '1080' }
+    }
+  }
+
+  load()
+
+  return {
+    get ready () { return !!(index && fd != null) },
+    get count () { return index ? index.size : 0 },
+    get meta () { return meta },
+    reload: load,
+    close,
+    readRawRecord,
+    getRankPayload
+  }
+}

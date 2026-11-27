@@ -24,6 +24,7 @@ import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import ext from '../sources/release-index.js'
 import { anitomyPure } from '../src/parse-title.js'
+import { openSeedStore, importSeed, DEFAULT_SEED_URL, DEFAULT_SEED_META_URL } from './seed-store.mjs'
 
 const DEFAULT_SOURCES_URL = 'https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -85,6 +86,10 @@ export function createLocalIndexServer (opts = {}) {
   const host = opts.host ?? process.env.HOST ?? '127.0.0.1'
   const port = Number(opts.port ?? process.env.PORT ?? 8787)
   const dataDir = path.resolve(opts.dataDir ?? process.env.DATA_DIR ?? path.join(ROOT, 'data/cache'))
+  const seedDir = path.resolve(opts.seedDir ?? process.env.SEED_DIR ?? path.join(ROOT, 'data/seed'))
+  const rawSeedUrl = opts.seedUrl !== undefined ? opts.seedUrl : (process.env.SEED_URL ?? DEFAULT_SEED_URL)
+  const seedUrl = /^(?:off|none|false|0)$/i.test(String(rawSeedUrl || '').trim()) ? '' : String(rawSeedUrl || '').trim()
+  const seedMetaUrl = opts.seedMetaUrl !== undefined ? opts.seedMetaUrl : (process.env.SEED_META_URL ?? (seedUrl === DEFAULT_SEED_URL ? DEFAULT_SEED_META_URL : ''))
   const feedUrls = String(opts.feedUrls ?? process.env.FEED_URLS ?? '').trim()
   const rawSourcesUrl = opts.sourcesUrl !== undefined ? opts.sourcesUrl : (process.env.SOURCES_URL ?? DEFAULT_SOURCES_URL)
   const sourcesUrl = /^(?:off|none|false|0)$/i.test(String(rawSourcesUrl || '').trim()) ? '' : String(rawSourcesUrl || '').trim()
@@ -110,6 +115,8 @@ export function createLocalIndexServer (opts = {}) {
   ext.settings = { indexUrl: '', sourcesUrl, feedUrls, useAnizip }
 
   fs.mkdirSync(path.join(dataDir, 'anilist'), { recursive: true })
+  const seedStore = openSeedStore(seedDir)
+  let seedImporting = false
 
   /** Hot in-memory cache of serialized gzipped + plain JSON responses for sub-millisecond reads. */
   const mem = new Map()
@@ -121,9 +128,11 @@ export function createLocalIndexServer (opts = {}) {
   const stats = {
     startedAt: new Date().toISOString(),
     cachedFiles: 0,
+    seedEpisodes: seedStore.count,
     builtCount: 0,
     memHits: 0,
     diskHits: 0,
+    seedHits: 0,
     misses: 0,
     lastPrebuildAt: null,
     lastPrebuildBuilt: 0,
@@ -146,12 +155,25 @@ export function createLocalIndexServer (opts = {}) {
       try {
         const gz = fs.readFileSync(file)
         const json = zlib.gunzipSync(gz).toString('utf8')
-        const entry = { json, gz, builtAt: fs.statSync(file).mtime.toISOString() }
+        const entry = { json, gz, builtAt: fs.statSync(file).mtime.toISOString(), cacheSource: 'hit' }
         mem.set(key, entry)
         if (mem.size > 500) mem.delete(mem.keys().next().value)
         stats.diskHits++
         return entry
       } catch {}
+    }
+    if (seedStore.ready) {
+      const payload = seedStore.getRankPayload(id, ep)
+      if (payload) {
+        const wrapped = { ...payload, anilistId: id, episode: ep, builtAt: payload.seededAt || new Date().toISOString() }
+        const json = JSON.stringify(wrapped)
+        const gz = zlib.gzipSync(Buffer.from(json, 'utf8'))
+        const entry = { json, gz, builtAt: wrapped.builtAt, cacheSource: 'seed' }
+        mem.set(key, entry)
+        if (mem.size > 500) mem.delete(mem.keys().next().value)
+        stats.seedHits++
+        return entry
+      }
     }
     stats.misses++
     return null
@@ -357,7 +379,7 @@ export function createLocalIndexServer (opts = {}) {
       'access-control-allow-origin': '*',
       'cache-control': 'public, max-age=60',
       'x-content-type-options': 'nosniff',
-      'x-local-cache': 'hit'
+      'x-local-cache': entry.cacheSource || 'hit'
     }
     if (wantsGz) {
       headers['content-encoding'] = 'gzip'
@@ -394,7 +416,16 @@ export function createLocalIndexServer (opts = {}) {
       }
 
       if (req.method === 'GET' && parts.length === 1 && (parts[0] === 'health.json' || parts[0] === 'healthz')) {
-        return sendJson(req, res, 200, { ok: true, mode: 'local-prebuilder', feedConfigured: hasSources, sourcesUrl: sourcesUrl || null, ...stats })
+        return sendJson(req, res, 200, {
+          ok: true,
+          mode: 'local-prebuilder',
+          feedConfigured: hasSources,
+          sourcesUrl: sourcesUrl || null,
+          seedReady: seedStore.ready,
+          seedImporting,
+          ...stats,
+          seedEpisodes: seedStore.count
+        })
       }
 
       if (req.method === 'GET' && parts.length === 1 && parts[0] === 'site.json') {
@@ -497,7 +528,21 @@ export function createLocalIndexServer (opts = {}) {
       await new Promise((resolve) => server.listen(port, host, resolve))
       const addr = server.address()
       const boundPort = typeof addr === 'object' && addr ? addr.port : port
-      log(`listening on http://${host}:${boundPort} (cache: ${dataDir}, sources: ${hasSources ? (sourcesUrl || 'FEED_URLS') : 'not set'})`)
+      log(`listening on http://${host}:${boundPort} (cache: ${dataDir}, seed: ${seedStore.count} eps, sources: ${hasSources ? (sourcesUrl || 'FEED_URLS') : 'not set'})`)
+      if (seedUrl && !seedStore.ready && !seedImporting) {
+        seedImporting = true
+        importSeed({ seedUrl, seedMetaUrl, seedDir, fetchImpl, log })
+          .then(() => {
+            seedStore.reload()
+            stats.seedEpisodes = seedStore.count
+            log(`seed hot-loaded: ${seedStore.count} episodes ready for millisecond lookups`)
+          })
+          .catch((err) => {
+            stats.lastError = `seed import: ${String(err?.message || err)}`
+            log(stats.lastError)
+          })
+          .finally(() => { seedImporting = false })
+      }
       if (refreshMinutes > 0 && hasSources) {
         setTimeout(() => prebuildSweep().catch(() => {}), 5000).unref()
         prebuildTimer = setInterval(() => prebuildSweep().catch(() => {}), refreshMinutes * 60_000)
@@ -507,6 +552,7 @@ export function createLocalIndexServer (opts = {}) {
     },
     async stop () {
       if (prebuildTimer) clearInterval(prebuildTimer)
+      seedStore.close()
       await new Promise((resolve) => server.close(resolve))
     }
   }

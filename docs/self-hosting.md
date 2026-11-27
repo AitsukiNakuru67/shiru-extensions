@@ -66,12 +66,18 @@ You can connect either way:
 
 ---
 
-## Pre-Populated Sanitized Seed Snapshot
+## Pre-Populated Sanitized Seed Snapshot (Auto-Bootstrap)
 
-Want to bootstrap a full self-hosted dataset without crawling from scratch? Download the latest sanitized public seed archive (all private/Usenet/egress state stripped) from the permanent link documented in **[SEED.md](../SEED.md)**:
+`server/local-index.mjs` automatically downloads, verifies (SHA-256), and indexes the sanitized public seed archive (`~63,000+` verified episodes, all private/Usenet/egress state stripped) on first boot via `SEED_URL` — or you can pre-hydrate it manually anytime with one command:
+
+```bash
+pnpm run seed
+# or: node scripts/import-seed.mjs
+```
 
 - Archive: `https://pixeldrain.com/api/filesystem/qkW71xWE/seed.tar.zst`
 - Metadata + SHA-256: `https://pixeldrain.com/api/filesystem/qkW71xWE/seed.json`
+- Details & checksums: **[SEED.md](../SEED.md)**
 
 ---
 
@@ -82,6 +88,8 @@ Want to bootstrap a full self-hosted dataset without crawling from scratch? Down
 | `HOST` | `127.0.0.1` | Bind address (`0.0.0.0` inside Docker) |
 | `PORT` | `8787` | HTTP port |
 | `DATA_DIR` | `./data/cache` | Directory storing pre-built gzipped `.rank.json.gz` files |
+| `SEED_DIR` | `./data/seed` | Directory storing the extracted & byte-indexed seed snapshot |
+| `SEED_URL` | `https://pixeldrain.com/api/filesystem/qkW71xWE/seed.tar.zst` | Permanent public seed archive URL auto-bootstrapped on first start (set `off` to disable) |
 | `SOURCES_URL` | `https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json` | Remote JSON manifest listing feed sources and trackers (set `off` to disable) |
 | `FEED_URLS` | *(empty)* | Optional extra comma-separated RSS 2.0, Torznab 1.3, or JSON feed URL templates (`{query}`, `{nativeQuery}`, `{anilistId}`, `{malId}`, `{anidbId}`, `{anidbEid}`, `{episode}`) |
 | `ANILIST_USER` | *(empty)* | Optional AniList username — pre-builds next episodes of shows in `CURRENT` / `REPEATING` |

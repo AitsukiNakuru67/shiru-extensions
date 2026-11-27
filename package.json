@@ -11,6 +11,7 @@
     "build": "node scripts/build.mjs",
     "dev": "node scripts/dev.mjs",
     "serve": "node server/local-index.mjs",
+    "seed": "node scripts/import-seed.mjs",
     "publish:sources": "node scripts/publish-sources.mjs",
     "test": "node --test test/*.test.mjs"
   },

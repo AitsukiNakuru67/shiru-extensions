@@ -13,7 +13,14 @@ Pre-populated, sanitized seed snapshot for self-hosting a fast release index wit
 
 ## Quick Download & Extract
 
-### Linux / macOS (with `zstd` + `tar`)
+### Built-In One-Command Bootstrap (Recommended for `local-index`)
+```bash
+pnpm run seed
+# or: node scripts/import-seed.mjs
+```
+`server/local-index.mjs` also runs this automatically on first boot when `SEED_URL` is enabled (the default), indexing all ~63,000+ verified episodes into `./data/seed` for sub-5 ms lookups.
+
+### Linux / macOS (Manual `zstd` + `tar`)
 ```bash
 curl -fL "https://pixeldrain.com/api/filesystem/qkW71xWE/seed.tar.zst" -o seed.tar.zst
 sha256sum seed.tar.zst
