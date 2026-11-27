@@ -5,6 +5,8 @@
  */
 import { DEFAULT_SEASONAL } from '../vendor/matcher/common/modules/seasonal/defaults.js'
 import { buildModalTargetWith } from '../vendor/matcher/common/modules/seasonal/grab/modalTarget.js'
+import { buildSearchQueries } from '../vendor/matcher/common/modules/seasonal/grab/searchQueries.js'
+import { dmhyQueries } from '../vendor/matcher/common/modules/seasonal/grab/dmhyHost.js'
 import { judgeModalResults } from '../vendor/matcher/common/modules/seasonal/grab/modalJudge.js'
 import { sortModalResults } from '../vendor/matcher/common/modules/seasonal/grab/modalList.js'
 import { releaseCardFacts, releaseCardLabels } from '../vendor/matcher/common/modules/seasonal/grab/modalCard.js'
@@ -116,26 +118,32 @@ async function formatRankRow (r, ctx) {
 }
 
 /**
- * Run Shiru's full on-device matcher, verifier, and ranker over raw candidate items and return a `RankResponse`.
+ * Build Shiru's full match target (AniZip mappings, catalog aliases, season/running-number hints)
+ * AND Shiru's real OR search query ladder (`buildSearchQueries` + `dmhyQueries`) BEFORE fetching feeds.
  *
  * @param {any} query Shiru `TorrentQuery`
- * @param {any[]} candidates Parsed candidate items from `feeds.js`
- * @param {{ useAnizip?: boolean, fresh?: boolean, trackers?: string[] }} [opts]
+ * @param {{ useAnizip?: boolean, fresh?: boolean }} [opts]
  */
-export async function matchCandidatesLocally (query, candidates, { useAnizip = true, fresh = false, trackers = [] } = {}) {
+export async function prepareMatchTarget (query, { useAnizip = true, fresh = false } = {}) {
   const media = toMediaObject(query)
   const episode = Number(query?.episode) || 1
   const resolution = String(query?.resolution || DEFAULT_SEASONAL.resolution || '1080')
   const settings = { ...structuredClone(DEFAULT_SEASONAL), resolution }
 
+  let resolvedMappings = null
   const aniMappings = async (id) => {
     if (Number(id) === Number(media.id) && query?.mappingsA && Object.keys(query.mappingsA).length && query?.mappingsE && Object.keys(query.mappingsE).length) {
-      return { mappings: query.mappingsA, episodes: { [episode]: query.mappingsE } }
+      resolvedMappings = { mappings: query.mappingsA, episodes: { [episode]: query.mappingsE } }
+      return resolvedMappings
     }
     const fetched = await fetchAnizipMappings(Number(id), { enabled: useAnizip, fresh })
-    if (fetched) return fetched
+    if (fetched) {
+      if (Number(id) === Number(media.id)) resolvedMappings = fetched
+      return fetched
+    }
     if (Number(id) === Number(media.id) && query?.mappingsA) {
-      return { mappings: query.mappingsA, episodes: query.mappingsE ? { [episode]: query.mappingsE } : {} }
+      resolvedMappings = { mappings: query.mappingsA, episodes: query.mappingsE ? { [episode]: query.mappingsE } : {} }
+      return resolvedMappings
     }
     return null
   }
@@ -152,6 +160,43 @@ export async function matchCandidatesLocally (query, candidates, { useAnizip = t
     }
   )
 
+  let orQueries = []
+  try {
+    const specs = buildSearchQueries(built.target, settings, { modal: true, wave: 'all', includeHybrid: true }) || []
+    const seen = new Set()
+    for (const s of specs) {
+      const q = String(s?.q || '').trim()
+      if (q && !seen.has(q)) {
+        seen.add(q)
+        orQueries.push(q)
+      }
+    }
+  } catch {}
+
+  let nativeQueries = []
+  try {
+    nativeQueries = dmhyQueries(built.target) || []
+  } catch {}
+
+  const epMap = resolvedMappings?.episodes?.[String(episode)] || resolvedMappings?.episodes?.[episode] || query?.mappingsE
+  const anidbId = Number(built.target?.anidbAid || resolvedMappings?.mappings?.anidb_id || query?.anidbAid || query?.mappingsA?.anidb_id || 0)
+  const anidbEid = Number(built.target?.anidbEid || epMap?.anidbEid || query?.anidbEid || 0)
+  const malId = Number(media?.idMal || resolvedMappings?.mappings?.mal_id || query?.mappingsA?.mal_id || 0)
+
+  return { media, episode, resolution, settings, built, orQueries, nativeQueries, anidbId, anidbEid, malId }
+}
+
+/**
+ * Run Shiru's full on-device matcher, verifier, and ranker over raw candidate items and return a `RankResponse`.
+ *
+ * @param {any} query Shiru `TorrentQuery`
+ * @param {any[]} candidates Parsed candidate items from `feeds.js`
+ * @param {{ useAnizip?: boolean, fresh?: boolean, trackers?: string[], usenetOn?: boolean, prepared?: any }} [opts]
+ */
+export async function matchCandidatesLocally (query, candidates, { useAnizip = true, fresh = false, trackers = [], usenetOn = true, prepared = null } = {}) {
+  const prep = prepared || await prepareMatchTarget(query, { useAnizip, fresh })
+  const { media, episode, resolution, settings, built } = prep
+
   const annotated = (candidates || []).map((item) => {
     if (!item || item.fallbackLanguage) return item
     const code = statedReleaseLanguage(item.title, { category: item.category })
@@ -160,7 +205,7 @@ export async function matchCandidatesLocally (query, candidates, { useAnizip = t
   })
 
   const judged = await judgeModalResults(annotated, built.target, settings, {
-    usenetOn: false,
+    usenetOn: usenetOn === true,
     logContext: { mediaId: media.id, episode }
   })
 

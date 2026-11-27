@@ -90,8 +90,10 @@ pnpm run seed
 | `DATA_DIR` | `./data/cache` | Directory storing pre-built gzipped `.rank.json.gz` files |
 | `SEED_DIR` | `./data/seed` | Directory storing the extracted & byte-indexed seed snapshot |
 | `SEED_URL` | `https://pixeldrain.com/api/filesystem/qkW71xWE/seed.tar.zst` | Permanent public seed archive URL auto-bootstrapped on first start (set `off` to disable) |
-| `SOURCES_URL` | `https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json` | Remote JSON manifest listing feed sources and trackers (set `off` to disable) |
-| `FEED_URLS` | *(empty)* | Optional extra comma-separated RSS 2.0, Torznab 1.3, or JSON feed URL templates (`{query}`, `{nativeQuery}`, `{anilistId}`, `{malId}`, `{anidbId}`, `{anidbEid}`, `{episode}`) |
+| `SOURCES_URL` | `https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json` | Remote JSON manifest listing feed sources, Usenet crawlers, and trackers (set `off` to disable) |
+| `ENABLE_USENET` | `1` | Query keyless Usenet crawlers (Binsearch, NZBKing, NZBIndex) + AnimeTosho NZBs (`0` disables) |
+| `AMENZB_API_KEY` | *(empty)* | Optional personal ameNZB API key (enables ameNZB Newznab searches; stripped from all cached rows) |
+| `FEED_URLS` | *(empty)* | Optional extra comma-separated RSS 2.0, Torznab 1.3, or JSON feed URL templates (`{query}`, `{orQuery}`, `{nativeQuery}`, `{anilistId}`, `{malId}`, `{anidbId}`, `{anidbEid}`, `{episode}`) |
 | `ANILIST_USER` | *(empty)* | Optional AniList username — pre-builds next episodes of shows in `CURRENT` / `REPEATING` |
 | `WATCH_ANILIST_IDS` | *(empty)* | Optional comma-separated AniList IDs to always pre-build |
 | `PREBUILD_AIRING` | `1` | Pre-build latest aired episode of currently airing popular shows |

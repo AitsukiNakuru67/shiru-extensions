@@ -133,11 +133,13 @@ export function createLocalIndexServer (opts = {}) {
   const prebuildLimit = Math.max(1, Math.min(100, Number(opts.prebuildLimit ?? process.env.PREBUILD_LIMIT ?? 25) || 25))
   const refreshMinutes = Math.max(0, Number(opts.refreshMinutes ?? process.env.REFRESH_MINUTES ?? 15) || 0)
   const useAnizip = (opts.useAnizip ?? process.env.USE_ANIZIP ?? '1') !== '0'
+  const enableUsenet = (opts.enableUsenet ?? process.env.ENABLE_USENET ?? '1') !== '0'
+  const amenzbApiKey = String(opts.amenzbApiKey ?? process.env.AMENZB_API_KEY ?? '').trim()
   const fetchImpl = opts.fetch || fetch
   const log = opts.log || ((...a) => console.log(`[local-index ${new Date().toISOString()}]`, ...a))
 
   ext.anitomyscript = opts.anitomyscript || anitomyPure
-  ext.settings = { indexUrl: '', sourcesUrl, feedUrls, useAnizip }
+  ext.settings = { indexUrl: '', sourcesUrl, feedUrls, useAnizip, enableUsenet, amenzbApiKey }
 
   fs.mkdirSync(path.join(dataDir, 'anilist'), { recursive: true })
   const seedStore = openSeedStore(seedDir)

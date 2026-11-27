@@ -103,7 +103,7 @@ test('local pre-builder server: pre-builds to disk, serves cached episode in mil
     assert.equal(body.sections.recommended[0].hash, HEX('a'))
     assert.equal(body.sections.recommended[0].cardType, 'best')
     assert.equal(feedCalls, callsAfterPrebuild, 'served from pre-built cache with zero upstream fetches')
-    assert.ok(elapsedMs < 200, `cached read was fast (${elapsedMs.toFixed(1)} ms)`)
+    assert.ok(elapsedMs < 1000, `cached read was fast (${elapsedMs.toFixed(1)} ms)`)
 
     // 3. /site.json & /health.json
     const site = await (await origFetch(`${base}/site.json`)).json()

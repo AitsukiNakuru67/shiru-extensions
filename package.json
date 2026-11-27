@@ -1,6 +1,6 @@
 {
   "name": "@aitsukinakuru67/shiru-extensions",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Standalone structured-list extensions for Shiru (on-device matcher + remote release index via list(query))",
   "license": "GPL-3.0-or-later",
   "type": "module",

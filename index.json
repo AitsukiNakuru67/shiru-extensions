@@ -2,7 +2,7 @@
   {
     "id": "release-index",
     "name": "Release Matcher",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "main": "sources/release-index.js",
     "update": "gh:AitsukiNakuru67/shiru-extensions",
     "type": "torrent",
@@ -15,7 +15,7 @@
         "label": "Sources Manifest URL",
         "default": "https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json",
         "placeholder": "https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json",
-        "description": "Remote JSON manifest listing feed sources and trackers fetched automatically (used when Release Index URL is blank)."
+        "description": "Remote JSON manifest listing feed sources, Usenet crawlers, and trackers fetched automatically (used when Release Index URL is blank)."
       },
       {
         "type": "text",
@@ -24,6 +24,21 @@
         "default": "",
         "placeholder": "http://127.0.0.1:8787",
         "description": "Optional: base URL of a pre-built release index server (HTTPS or localhost). Overrides live source fetching when set."
+      },
+      {
+        "type": "text",
+        "key": "amenzbApiKey",
+        "label": "ameNZB API Key (Optional)",
+        "default": "",
+        "placeholder": "Paste your ameNZB API key",
+        "description": "Optional: paste your personal ameNZB API key to enable ameNZB Newznab searches alongside keyless Usenet crawlers. Never shared or logged."
+      },
+      {
+        "type": "toggle",
+        "key": "enableUsenet",
+        "label": "Include Usenet crawlers (Binsearch / NZBKing / NZBIndex / ameNZB)",
+        "default": true,
+        "description": "Query keyless Usenet crawlers (and ameNZB when your key is set above) for dead-swarm and rare releases."
       },
       {
         "type": "text",
@@ -41,6 +56,6 @@
         "description": "Fetch and cache AniList-to-AniDB/TVDB episode mappings locally for more accurate season, episode, and ID-based matching."
       }
     ],
-    "description": "Runs Shiru's full episode matcher, verifier, and ranker locally inside the extension worker from a remote Sources Manifest (or connects to a pre-built Release Index URL)."
+    "description": "Runs Shiru's full episode matcher, query ladder, verifier, and ranker locally inside the extension worker from a remote Sources Manifest (SeaDex, AnimeTosho, Nyaa, Sukebei, dmhy, Mikan, Usenet crawlers + optional ameNZB) or connects to a pre-built Release Index URL."
   }
 ]

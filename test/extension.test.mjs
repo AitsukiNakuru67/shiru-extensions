@@ -258,3 +258,91 @@ test('remote sourcesUrl manifest: fetches SeaDex, AnimeTosho JSON, dmhy base32 m
     globalThis.fetch = origFetch
   }
 })
+
+test('Usenet crawlers (Binsearch / NZBKing / NZBIndex), key-gated ameNZB with apikey stripping, and OR query ladder', async () => {
+  const manifest = {
+    schemaVersion: 1,
+    indexUrl: '',
+    trackers: [],
+    sources: [
+      { id: 'nyaa-en', format: 'rss', scope: 'sfw', enabled: true, url: 'https://nyaa.example.test/?page=rss&c=1_2&q={orQuery}' },
+      { id: 'binsearch', format: 'binsearch-html', scope: 'usenet', enabled: true, url: 'https://binsearch.example.test/search?q={query}' },
+      { id: 'nzbking', format: 'nzbking-html', scope: 'usenet', enabled: true, url: 'https://nzbking.example.test/search/?q={query}' },
+      { id: 'nzbindex', format: 'nzbindex-json', scope: 'usenet', enabled: true, url: 'https://nzbindex.example.test/api/search?q={query}' },
+      { id: 'amenzb-query', format: 'newznab', scope: 'usenet', enabled: true, url: 'https://amenzb.example.test/api?t=search&q={query}&apikey={amenzbKey}' }
+    ]
+  }
+
+  const secretKey = 'SUPER_SECRET_AMENZB_KEY_999'
+  const origFetch = globalThis.fetch
+  const requested = []
+  globalThis.fetch = async (url) => {
+    const u = String(url)
+    requested.push(u)
+    if (u.startsWith('https://usenet-manifest.example.test/sources.json')) {
+      return new Response(JSON.stringify(manifest), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.startsWith('https://nyaa.example.test/')) {
+      return new Response('<rss><channel></channel></rss>', { status: 200, headers: { 'content-type': 'application/xml' } })
+    }
+    if (u.startsWith('https://binsearch.example.test/')) {
+      const html = `<table><tr class="result-table"><td><div><a href="/details/bs123">[BinGroup] Sousou no Frieren - 01 (1080p) [01/10]</a><div class="flex flex-row flex-wrap gap-1 items-center text-xs"><a href="/search?poster=bot">bot</a><span class="bg-white">1.20GB</span><span> complete </span></div></div></td><td class="min-w-20">2d</td></tr></table>`
+      return new Response(html, { status: 200, headers: { 'content-type': 'text/html' } })
+    }
+    if (u.startsWith('https://nzbking.example.test/')) {
+      const html = `<div class='search-result'><div class='search-subject'>[KingGroup] Sousou no Frieren - 01 (1080p).mkv<br></div><a href="/nzb:KING42/">dl</a> parts: 12/12 size: 1.35GB</div>`
+      return new Response(html, { status: 200, headers: { 'content-type': 'text/html' } })
+    }
+    if (u.startsWith('https://nzbindex.example.test/')) {
+      return new Response(JSON.stringify({
+        data: { content: [{ id: 'idx-77', name: '[IdxGroup] Sousou no Frieren - 01 (1080p).mkv', size: 1400000000, complete: true, posted: 1696000000 }] }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.startsWith('https://amenzb.example.test/')) {
+      const xml = `<rss><channel><item><title>[AmeGroup] Sousou no Frieren - 01 (1080p).mkv</title><link>https://amenzb.example.test/api?t=get&amp;id=55&amp;apikey=${secretKey}</link><enclosure url="https://amenzb.example.test/api?t=get&amp;id=55&amp;apikey=${secretKey}" length="1500000000" type="application/x-nzb" /></item></channel></rss>`
+      return new Response(xml, { status: 200, headers: { 'content-type': 'application/xml' } })
+    }
+    return new Response('', { status: 404 })
+  }
+
+  const baseQuery = {
+    anilistId: 154587,
+    episode: 1,
+    episodeCount: 28,
+    resolution: '1080',
+    titles: ['Sousou no Frieren'],
+    media: {
+      id: 154587,
+      episodes: 28,
+      format: 'TV',
+      status: 'FINISHED',
+      genres: ['Adventure', 'Fantasy'],
+      title: { romaji: 'Sousou no Frieren', english: "Frieren: Beyond Journey's End", native: '葬送のフリーレン', userPreferred: 'Sousou no Frieren' },
+      synonyms: [],
+      relations: { edges: [] }
+    }
+  }
+
+  try {
+    // 1. Without ameNZB key: keyless crawlers run, ameNZB is skipped
+    ext.settings = { indexUrl: '', sourcesUrl: 'https://usenet-manifest.example.test/sources.json', feedUrls: '', useAnizip: false, enableUsenet: true, amenzbApiKey: '' }
+    const rNoKey = await ext.list(baseQuery, { fresh: true })
+    assert.ok(!requested.some((u) => u.startsWith('https://amenzb.example.test/')), 'ameNZB is skipped when amenzbApiKey is blank')
+    assert.ok(requested.some((u) => u.startsWith('https://nyaa.example.test/') && decodeURIComponent(u).includes('|')), 'Shiru OR query ladder sent to Nyaa')
+    const hostsNoKey = new Set(rNoKey.sections.usenet.map((r) => r.host))
+    assert.ok(hostsNoKey.has('binsearch'), 'Binsearch NZB surfaced in sections.usenet')
+    assert.ok(hostsNoKey.has('nzbking'), 'NZBKing NZB surfaced in sections.usenet')
+    assert.ok(hostsNoKey.has('nzbindex'), 'NZBIndex NZB surfaced in sections.usenet')
+
+    // 2. With ameNZB key: ameNZB runs and strips apikey from all returned rows
+    requested.length = 0
+    ext.settings = { indexUrl: '', sourcesUrl: 'https://usenet-manifest.example.test/sources.json', feedUrls: '', useAnizip: false, enableUsenet: true, amenzbApiKey: secretKey }
+    const rWithKey = await ext.list(baseQuery, { fresh: true })
+    assert.ok(requested.some((u) => u.startsWith('https://amenzb.example.test/') && u.includes(secretKey)), 'ameNZB queried with user API key')
+    const ameRow = rWithKey.sections.usenet.find((r) => r.host === 'amenzb')
+    assert.ok(ameRow, 'ameNZB NZB surfaced in sections.usenet')
+    assert.ok(!JSON.stringify(rWithKey).includes(secretKey), 'ameNZB API key is stripped from all returned rows')
+  } finally {
+    globalThis.fetch = origFetch
+  }
+})

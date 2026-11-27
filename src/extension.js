@@ -7,7 +7,7 @@ import {
   fetchSourcesManifest,
   fetchFeedCandidates
 } from './feeds.js'
-import { matchCandidatesLocally } from './local-matcher.js'
+import { prepareMatchTarget, matchCandidatesLocally } from './local-matcher.js'
 
 const HEX40 = /^[0-9a-f]{40}$/i
 
@@ -175,8 +175,27 @@ export default new class ReleaseMatcherExtension extends AbstractSource {
       throw new Error('Configure a Sources Manifest URL, Release Index URL, or Feed URLs in Extension Settings to search.')
     }
     const useAnizip = this.settings?.useAnizip !== false
-    const candidates = await fetchFeedCandidates(cfg.sources, query, { fresh, useAnizip })
-    return matchCandidatesLocally(query, candidates, { useAnizip, fresh, trackers: cfg.trackers })
+    const enableUsenet = this.settings?.enableUsenet !== false
+    const amenzbKey = String(this.settings?.amenzbApiKey || '').trim()
+    const prepared = await prepareMatchTarget(query, { useAnizip, fresh })
+    const candidates = await fetchFeedCandidates(cfg.sources, query, {
+      fresh,
+      useAnizip,
+      enableUsenet,
+      amenzbKey,
+      orQueries: prepared.orQueries,
+      nativeQueries: prepared.nativeQueries,
+      anidbId: prepared.anidbId,
+      anidbEid: prepared.anidbEid,
+      malId: prepared.malId
+    })
+    return matchCandidatesLocally(query, candidates, {
+      useAnizip,
+      fresh,
+      trackers: cfg.trackers,
+      usenetOn: enableUsenet,
+      prepared
+    })
   }
 
   async #flatQuery (query) {
