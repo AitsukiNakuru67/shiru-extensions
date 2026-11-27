@@ -339,8 +339,16 @@ export function createLocalIndexServer (opts = {}) {
 
     for (const t of targets.values()) {
       try {
+        // Skip episodes already freshly cached on disk so restarts don't block the event loop unnecessarily.
+        const file = rankFilePath(t.id, t.ep)
+        const minRefreshMs = Math.max(15, refreshMinutes || 15) * 60_000
+        if (fs.existsSync(file)) {
+          const ageMs = Date.now() - fs.statSync(file).mtimeMs
+          if (ageMs < minRefreshMs) continue
+        }
         const res = await buildEpisode(t.id, t.ep, { media: t.media, fresh: true })
         if (res) built++
+        await new Promise((r) => setTimeout(r, 200))
       } catch (err) {
         stats.lastError = String(err?.message || err)
       }
@@ -544,7 +552,7 @@ export function createLocalIndexServer (opts = {}) {
           .finally(() => { seedImporting = false })
       }
       if (refreshMinutes > 0 && hasSources) {
-        setTimeout(() => prebuildSweep().catch(() => {}), 5000).unref()
+        setTimeout(() => prebuildSweep().catch(() => {}), 30_000).unref()
         prebuildTimer = setInterval(() => prebuildSweep().catch(() => {}), refreshMinutes * 60_000)
         prebuildTimer.unref()
       }
