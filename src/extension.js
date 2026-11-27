@@ -4,10 +4,9 @@ import {
   normalizeAllowedUrl,
   normalizeBaseUrl,
   parseFeedTemplates,
-  fetchSourcesManifest,
-  fetchFeedCandidates
+  fetchSourcesManifest
 } from './feeds.js'
-import { prepareMatchTarget, matchCandidatesLocally } from './local-matcher.js'
+import { searchCandidatesWithParity, searchAndMatchLocally } from './local-matcher.js'
 
 const HEX40 = /^[0-9a-f]{40}$/i
 
@@ -177,24 +176,12 @@ export default new class ReleaseMatcherExtension extends AbstractSource {
     const useAnizip = this.settings?.useAnizip !== false
     const enableUsenet = this.settings?.enableUsenet !== false
     const amenzbKey = String(this.settings?.amenzbApiKey || '').trim()
-    const prepared = await prepareMatchTarget(query, { useAnizip, fresh })
-    const candidates = await fetchFeedCandidates(cfg.sources, query, {
-      fresh,
-      useAnizip,
-      enableUsenet,
-      amenzbKey,
-      orQueries: prepared.orQueries,
-      nativeQueries: prepared.nativeQueries,
-      anidbId: prepared.anidbId,
-      anidbEid: prepared.anidbEid,
-      malId: prepared.malId
-    })
-    return matchCandidatesLocally(query, candidates, {
+    return searchAndMatchLocally(query, cfg.sources, {
       useAnizip,
       fresh,
       trackers: cfg.trackers,
-      usenetOn: enableUsenet,
-      prepared
+      enableUsenet,
+      amenzbKey
     })
   }
 
@@ -215,7 +202,13 @@ export default new class ReleaseMatcherExtension extends AbstractSource {
 
     if (!cfg.sources.length) return []
     const useAnizip = this.settings?.useAnizip !== false
-    const candidates = await fetchFeedCandidates(cfg.sources, query, { useAnizip })
+    const enableUsenet = this.settings?.enableUsenet !== false
+    const amenzbKey = String(this.settings?.amenzbApiKey || '').trim()
+    const { candidates } = await searchCandidatesWithParity(query, cfg.sources, {
+      useAnizip,
+      enableUsenet,
+      amenzbKey
+    })
     return candidates.filter((r) => r.kind !== 'nzb').map((r) => toTorrentResult(r, cfg.trackers))
   }
 

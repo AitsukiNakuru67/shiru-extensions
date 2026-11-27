@@ -7,6 +7,7 @@ import { DEFAULT_SEASONAL } from '../vendor/matcher/common/modules/seasonal/defa
 import { buildModalTargetWith } from '../vendor/matcher/common/modules/seasonal/grab/modalTarget.js'
 import { buildSearchQueries } from '../vendor/matcher/common/modules/seasonal/grab/searchQueries.js'
 import { dmhyQueries } from '../vendor/matcher/common/modules/seasonal/grab/dmhyHost.js'
+import { cascadeSearch, resetHostBreakers, mergeByHash, tagForeignReleases } from '../vendor/matcher/common/modules/seasonal/grab/cascadeSearch.js'
 import { judgeModalResults } from '../vendor/matcher/common/modules/seasonal/grab/modalJudge.js'
 import { sortModalResults } from '../vendor/matcher/common/modules/seasonal/grab/modalList.js'
 import { releaseCardFacts, releaseCardLabels } from '../vendor/matcher/common/modules/seasonal/grab/modalCard.js'
@@ -15,7 +16,9 @@ import { formatScoreBreakdown, sortEngineFromSettings } from '../vendor/matcher/
 import { displayCardType, viewRowKey, releaseCopyKey, modalPackSpan } from '../vendor/matcher/common/modules/seasonal/grab/modalView.js'
 import { possiblyInaccurateBadge, possiblyInaccurateWhy, possiblyInaccurateTone } from '../vendor/matcher/common/modules/seasonal/grab/possiblyInaccurate.js'
 import { statedReleaseLanguage, LANGUAGE_LABELS } from '../vendor/matcher/common/modules/anime/releaseLanguage.js'
-import { fetchAnizipMappings } from './feeds.js'
+import { setWorkerViewerSettings } from './shims/seasonalSettings.js'
+import { resolveManifestHosts, setCascadeTransportContext } from './cascade-transport.js'
+import { fetchAnizipMappings, fetchFeedCandidates } from './feeds.js'
 
 const HEX40 = /^[0-9a-f]{40}$/
 
@@ -182,8 +185,113 @@ export async function prepareMatchTarget (query, { useAnizip = true, fresh = fal
   const anidbId = Number(built.target?.anidbAid || resolvedMappings?.mappings?.anidb_id || query?.anidbAid || query?.mappingsA?.anidb_id || 0)
   const anidbEid = Number(built.target?.anidbEid || epMap?.anidbEid || query?.anidbEid || 0)
   const malId = Number(media?.idMal || resolvedMappings?.mappings?.mal_id || query?.mappingsA?.mal_id || 0)
+  // Ensure target carries externally supplied AniDB/MAL IDs even when AniZip is disabled or incomplete.
+  if (anidbId > 0 && !built.target.anidbAid) built.target.anidbAid = anidbId
+  if (anidbEid > 0 && !built.target.anidbEid) built.target.anidbEid = anidbEid
+  if (malId > 0 && !built.target.idMal) built.target.idMal = malId
 
   return { media, episode, resolution, settings, built, orQueries, nativeQueries, anidbId, anidbEid, malId }
+}
+
+/**
+ * Full-parity live candidate discovery using Shiru's real `cascadeSearch.js`
+ * (OR wave, 75-row saturated Nyaa HTML top-seeded escalation, Wave F fansub follow-up,
+ * hybrid stems, language `1_0` fallback, parent-stem, sequel-run fallback, SFW↔Sukebei
+ * escalation, native-title search, Raw `1_4` fallback, AnimeTosho Torznab/eid/aid/parentAid/title
+ * AniDB learning, SeaDex episode file picking + upscale detection, dmhy/Mikan, ameNZB)
+ * PLUS keyless Usenet crawlers (`binsearch`, `nzbking`, `nzbindex`) & custom user `feedUrls`.
+ */
+export async function searchCandidatesWithParity (query, sourcesOrTemplates, {
+  useAnizip = true,
+  fresh = false,
+  enableUsenet = true,
+  amenzbKey = '',
+  prepared = null
+} = {}) {
+  const prep = prepared || await prepareMatchTarget(query, { useAnizip, fresh })
+  const { hosts, extraSources } = resolveManifestHosts(sourcesOrTemplates)
+  const hasCascadeHost = Object.values(hosts).some(Boolean)
+
+  let cascadeItems = []
+  let extraItems = []
+
+  const jobs = []
+  if (hasCascadeHost) {
+    jobs.push((async () => {
+      if (fresh) resetHostBreakers()
+      const cleanKey = String(amenzbKey || '').trim()
+      const cascadeSettings = {
+        ...prep.settings,
+        usenet: {
+          ...DEFAULT_SEASONAL.usenet,
+          enabled: enableUsenet === true,
+          amenzbApiKey: cleanKey
+        }
+      }
+      setWorkerViewerSettings({
+        adult: 'hentai',
+        seasonal: cascadeSettings
+      })
+      setCascadeTransportContext({
+        fresh,
+        enableUsenet: enableUsenet === true,
+        amenzbKey: cleanKey,
+        hosts
+      })
+      const out = await cascadeSearch(prep.built.target, cascadeSettings, {
+        modal: true,
+        hostTimeoutMs: 15000,
+        ledger: { nativeTitleSearch: true }
+      })
+      cascadeItems = Array.isArray(out?.items) ? out.items : []
+    })())
+  }
+
+  if (extraSources.length) {
+    jobs.push((async () => {
+      extraItems = await fetchFeedCandidates(extraSources, query, {
+        fresh,
+        useAnizip,
+        enableUsenet,
+        amenzbKey,
+        orQueries: prep.orQueries,
+        nativeQueries: prep.nativeQueries,
+        anidbId: prep.anidbId,
+        anidbEid: prep.anidbEid,
+        malId: prep.malId
+      })
+    })())
+  }
+
+  await Promise.all(jobs)
+
+  const merged = tagForeignReleases(mergeByHash(cascadeItems, extraItems), { target: prep.built.target })
+  return { prepared: prep, candidates: merged }
+}
+
+/**
+ * Full-parity search + local judge + local rank pipeline (used by both the extension worker and local-index).
+ */
+export async function searchAndMatchLocally (query, sourcesOrTemplates, {
+  useAnizip = true,
+  fresh = false,
+  trackers = [],
+  enableUsenet = true,
+  amenzbKey = ''
+} = {}) {
+  const { prepared, candidates } = await searchCandidatesWithParity(query, sourcesOrTemplates, {
+    useAnizip,
+    fresh,
+    enableUsenet,
+    amenzbKey
+  })
+  return matchCandidatesLocally(query, candidates, {
+    useAnizip,
+    fresh,
+    trackers,
+    usenetOn: enableUsenet === true,
+    prepared
+  })
 }
 
 /**

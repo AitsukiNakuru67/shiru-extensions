@@ -2,7 +2,7 @@
   {
     "id": "release-index",
     "name": "Release Matcher",
-    "version": "0.4.2",
+    "version": "0.5.0",
     "main": "sources/release-index.js",
     "update": "gh:AitsukiNakuru67/shiru-extensions",
     "type": "torrent",
@@ -12,51 +12,51 @@
       {
         "type": "text",
         "key": "sourcesUrl",
-        "label": "Sources Manifest URL",
+        "label": "Sources list URL",
         "default": "https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json",
         "placeholder": "https://pixeldrain.com/api/filesystem/qkW71xWE/sources.json",
-        "description": "Remote JSON manifest listing feed sources, Usenet crawlers, and trackers fetched automatically (used when Release Index URL is blank)."
+        "description": "Web address of the list of sites to search. Leave as default unless you use your own."
       },
       {
         "type": "text",
         "key": "indexUrl",
-        "label": "Release Index URL (Optional)",
+        "label": "Custom server URL (Optional)",
         "default": "",
         "placeholder": "http://127.0.0.1:8787",
-        "description": "Optional: base URL of a pre-built release index server (HTTPS or localhost). Overrides live source fetching when set."
+        "description": "Address of your own pre-built search server. When set, episodes load from it instead of searching live."
       },
       {
         "type": "text",
         "key": "amenzbApiKey",
-        "label": "ameNZB API Key (Optional)",
+        "label": "ameNZB API key (Optional)",
         "default": "",
         "placeholder": "Paste your ameNZB API key",
-        "description": "Optional: paste your personal ameNZB API key to enable ameNZB Newznab searches alongside keyless Usenet crawlers. Never shared or logged."
+        "description": "Optional personal key to also search ameNZB. Stays on your device and is never shared."
       },
       {
         "type": "toggle",
         "key": "enableUsenet",
-        "label": "Include Usenet crawlers (Binsearch / NZBKing / NZBIndex / ameNZB)",
+        "label": "Include Usenet results",
         "default": true,
-        "description": "Query keyless Usenet crawlers (and ameNZB when your key is set above) for dead-swarm and rare releases."
+        "description": "Also search Usenet for rare or older episodes."
       },
       {
         "type": "text",
         "key": "feedUrls",
-        "label": "Extra Feed URLs (Optional)",
+        "label": "Extra feed URLs (Optional)",
         "default": "",
         "placeholder": "https://feed.example/api?t=tvsearch&q={query}",
-        "description": "Optional comma-separated extra RSS 2.0, Torznab 1.3, or JSON feed URLs queried alongside the Sources Manifest."
+        "description": "Optional extra feed addresses to search alongside the main list, separated by commas."
       },
       {
         "type": "toggle",
         "key": "useAnizip",
-        "label": "Fetch AniZip mappings",
+        "label": "Use episode ID mappings",
         "default": true,
-        "description": "Fetch and cache AniList-to-AniDB/TVDB episode mappings locally for more accurate season, episode, and ID-based matching."
+        "description": "Uses AniZip to match seasons and episode numbers more accurately."
       }
     ],
-    "description": "Runs Shiru's full episode matcher, query ladder, verifier, and ranker locally inside the extension worker from a remote Sources Manifest (SeaDex, AnimeTosho, Nyaa, Sukebei, dmhy, Mikan, Usenet crawlers + optional ameNZB) or connects to a pre-built Release Index URL.",
+    "description": "Finds matching anime episodes across multiple sources and ranks the best downloads first.",
     "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0Ij4KICA8dGl0bGU+UmVsZWFzZSBNYXRjaGVyPC90aXRsZT4KICA8ZyBmaWxsPSJub25lIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPgogICAgPHBhdGggZD0iTTI1IDE0SDE0djQwaDExTTQzIDE0aDExdjQwSDQzIiBzdHJva2U9IiMwMDhjOGMiIHN0cm9rZS13aWR0aD0iOCIvPgogICAgPHBhdGggZD0iTTIxIDEwSDEwdjQwaDExTTM5IDEwaDExdjQwSDM5IiBzdHJva2U9IiMxYmQwZDYiIHN0cm9rZS13aWR0aD0iOCIvPgogICAgPHBhdGggZD0iTTI0IDI0aDEyTTI0IDM2aDEyIiBzdHJva2U9IiNlYmViZWIiIHN0cm9rZS13aWR0aD0iNi41Ii8+CiAgPC9nPgo8L3N2Zz4K"
   }
 ]

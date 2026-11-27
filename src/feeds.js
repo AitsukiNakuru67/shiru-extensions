@@ -190,6 +190,8 @@ export function parseFeedXml (xml, sourceUrl = '', sourceId = '', { isNewznab = 
     const pubDate = tagText(block, 'pubDate') || tagText(block, 'torrent:pubDate') || ''
     const trustedRaw = (attrs.get('trusted') || tagText(block, 'nyaa:trusted') || '').toLowerCase()
     const remakeRaw = (attrs.get('remake') || tagText(block, 'nyaa:remake') || '').toLowerCase()
+    const rawCat = tagText(block, 'nyaa:categoryId') || attrs.get('category') || ''
+    const category = host !== 'sukebei' && /^\d_\d$/.test(rawCat.trim()) ? rawCat.trim() : ''
 
     items.push({
       title,
@@ -201,16 +203,73 @@ export function parseFeedXml (xml, sourceUrl = '', sourceId = '', { isNewznab = 
       leechers,
       downloads,
       pubDate,
+      guid: guid || linkTag || infoHash,
       pageUrl: /^https?:\/\//i.test(guid) ? guid : (/^https?:\/\//i.test(linkTag) ? linkTag : ''),
       trusted: trustedRaw === 'yes' || trustedRaw === 'true' || trustedRaw === '1',
       remake: remakeRaw === 'yes' || remakeRaw === 'true' || remakeRaw === '1',
       kind,
+      ...(category ? { category } : {}),
       ...(nzbUrl ? { nzbUrl } : {}),
       host: isNewznab && sourceId.startsWith('amenzb') ? 'amenzb' : host,
       source: host ? [isNewznab && sourceId.startsWith('amenzb') ? 'amenzb' : host] : []
     })
   }
   return items
+}
+
+/**
+ * Parse Nyaa / Sukebei HTML listing page (used by `searchNyaaTop` seeder-sorted escalation
+ * whenever a saturated RSS query hits the 75-row cap). Uses dynamic `origin` from manifest.
+ */
+export function parseNyaaHtml (html, { host = 'nyaa', origin = '' } = {}) {
+  if (!html || typeof html !== 'string') return []
+  const base = String(origin || '').replace(/\/+$/, '')
+  const out = []
+  const rowRe = /<tr class="(default|success|danger)">([\s\S]*?)<\/tr>/gi
+  let row
+  while ((row = rowRe.exec(html)) !== null) {
+    const rowClass = row[1].toLowerCase()
+    const block = row[2]
+    const titleHit = /<a href="\/view\/(\d+)"[^>]*title="([^"]*)"/i.exec(block)
+    if (!titleHit) continue
+    const viewId = titleHit[1]
+    const title = decodeXml(titleHit[2])
+    if (!title) continue
+
+    const magnet = decodeXml((/href="(magnet:\?[^"]+)"/i.exec(block) || [])[1] || '')
+    const infoHash = normalizeInfoHash((magnet.match(/btih:([0-9a-fA-F]{40}|[a-zA-Z2-7]{32})/) || [])[1] || '')
+    const cells = [...block.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((m) => decodeXml(m[1].replace(/<[^>]+>/g, '')).trim())
+    const seedersText = String(cells.at(-3) || '').trim()
+    const seeders = /^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(seedersText) ? Number(seedersText.replace(/,/g, '')) : null
+    const completedText = String(cells.at(-1) || '').trim()
+    const downloads = /^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(completedText) ? Number(completedText.replace(/,/g, '')) : null
+    const size = parseByteSize(cells.at(-5) || '')
+    const timestamp = Number((/data-timestamp="(\d+)"/i.exec(block) || [])[1] || 0)
+    const rawCat = (/href="\/\?c=(\d+_\d+)"/i.exec(block) || [])[1] || ''
+    const category = host !== 'sukebei' && /^\d_\d$/.test(rawCat) ? rawCat : ''
+
+    out.push({
+      title,
+      link: magnet || (infoHash ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(title)}` : (base ? `${base}/download/${viewId}.torrent` : '')),
+      magnet,
+      guid: viewId,
+      pageUrl: base ? `${base}/view/${viewId}` : '',
+      pubDate: timestamp ? new Date(timestamp * 1000).toUTCString() : '',
+      seeders,
+      leechers: null,
+      downloads,
+      trusted: rowClass === 'success',
+      remake: rowClass === 'danger',
+      infoHash,
+      hash: infoHash,
+      size,
+      kind: 'torrent',
+      host,
+      source: [host],
+      ...(category ? { category } : {})
+    })
+  }
+  return out
 }
 
 /** Parse Binsearch HTML search page into grouped complete Usenet NZB candidates (keyless). */
@@ -344,31 +403,71 @@ export function parseNzbindexJson (data, sourceUrl = '') {
   return out
 }
 
-/** Parse AnimeTosho JSON feed array (`feed.animetosho.net/json`) into candidate items. */
-export function parseAnimeToshoJson (data, sourceUrl = '', sourceId = 'animetosho', { enableUsenet = true } = {}) {
-  const list = Array.isArray(data) ? data : []
+/** Majority AniDB anime id across AnimeTosho title-search rows (matches Shiru `animetoshoParse.js`). */
+export function dominantAid (items) {
+  const counts = new Map()
+  let total = 0
+  for (const it of items || []) {
+    const aid = Number(it?.anidbAid)
+    if (!Number.isFinite(aid) || aid <= 0) continue
+    counts.set(aid, (counts.get(aid) || 0) + 1)
+    total++
+  }
+  let best = null
+  let bestCount = 0
+  for (const [aid, n] of counts) {
+    if (n > bestCount) { best = aid; bestCount = n }
+  }
+  if (bestCount < 2 || bestCount * 2 <= total) return null
+  return best
+}
+
+/** Parse AnimeTosho JSON feed array (`json?eid=`, `json?aid=`, `json?q=`) into candidate items with full AniDB/file metadata. */
+export function parseAnimeToshoJson (data, sourceUrl = '', sourceId = 'animetosho', { enableUsenet = true, nyaaOrigin = '', sukebeiOrigin = '' } = {}) {
+  const list = Array.isArray(data)
+    ? data
+    : (Array.isArray(data?.releases) ? data.releases : (Array.isArray(data?.torrents) ? data.torrents : (Array.isArray(data?.data) ? data.data : [])))
   let host = sourceId || 'animetosho'
   if (!host) {
     try { host = new URL(sourceUrl).hostname } catch {}
   }
+  const nyaaBase = String(nyaaOrigin || '').replace(/\/+$/, '')
+  const sukebeiBase = String(sukebeiOrigin || '').replace(/\/+$/, '')
   const out = []
   for (const r of list) {
     if (!r || typeof r !== 'object') continue
-    const title = String(r.title || '').trim()
+    const title = String(r.title || r.torrent_name || r.name || '').trim()
     if (!title) continue
-    const infoHash = normalizeInfoHash(r.info_hash || r.infoHash || BTIH_RX.exec(String(r.magnet_uri || ''))?.[1] || '')
-    const nzbUrl = typeof r.nzb_url === 'string' && /^https?:\/\//i.test(r.nzb_url) ? r.nzb_url : ''
-    const link = String(r.magnet_uri || (infoHash ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(title)}` : (r.torrent_url || '')))
-    const ts = Number(r.timestamp)
-    const pubDate = Number.isFinite(ts) && ts > 0 ? new Date(ts * 1000).toISOString() : ''
+    const infoHash = normalizeInfoHash(r.info_hash || r.torrent_hash || r.infoHash || BTIH_RX.exec(String(r.magnet_uri || r.magnet || ''))?.[1] || '')
+    const nzbUrl = typeof (r.nzb_url || r.nzb) === 'string' && /^https?:\/\//i.test(r.nzb_url || r.nzb) ? String(r.nzb_url || r.nzb) : ''
+    const link = String(r.magnet_uri || r.magnet || (infoHash ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(title)}` : (r.torrent_url || '')))
+    const ts = Number(r.timestamp ?? r.date_added ?? r.date)
+    const pubDate = Number.isFinite(ts) && ts > 0 ? new Date(ts * 1000).toISOString() : (typeof r.date === 'string' ? r.date : '')
     const seeders = intOrNull(r.seeders)
-    const size = parseByteSize(r.total_size || r.size || 0)
-    const pageUrl = String(r.website_url || r.link || '')
+    const size = parseByteSize(r.size_bytes ?? r.total_size ?? r.size ?? 0)
+    const pageUrl = String(r.urls?.view || r.website_url || r.link || '')
+    const series = r.series && typeof r.series === 'object' ? r.series : {}
+    const anidbEid = Number(series.anidb_eid ?? r.anidb_eid) || null
+    const anidbAid = Number(series.anidb_aid ?? r.anidb_aid) || null
+    const anidbEpisodeNumber = series.episode_number != null ? Number(series.episode_number) : null
+    const group = String(r.release_group || r.group || '').trim()
+    const resolution = String(r.resolution || '').trim()
+    const nyaaId = Number(r.nyaa_id)
+    const nyaaSub = r.nyaa_subdom == null ? '' : String(r.nyaa_subdom).trim().toLowerCase()
+    const nyaaUrl = Number.isSafeInteger(nyaaId) && nyaaId > 0
+      ? (nyaaSub === 'sukebei' && sukebeiBase ? `${sukebeiBase}/view/${nyaaId}` : (!nyaaSub || nyaaSub === 'www') && nyaaBase ? `${nyaaBase}/view/${nyaaId}` : '')
+      : ''
+    const filesValid = Array.isArray(r.files) && r.files.length && r.files.every((f) => typeof f?.filename === 'string' && f.filename)
+    const fileNames = filesValid ? r.files.map((f) => f.filename) : null
+    const listedFiles = infoHash && filesValid && r.files.every((f) => Number.isSafeInteger(f.size) && f.size >= 0)
+      ? { infoHash, name: String(r.torrent_name || title), files: r.files.map((f) => ({ path: f.filename, length: f.size })) }
+      : null
 
     if (infoHash) {
       out.push({
         title,
         link,
+        guid: String(r.id || infoHash || link),
         infoHash,
         hash: infoHash,
         size,
@@ -377,19 +476,30 @@ export function parseAnimeToshoJson (data, sourceUrl = '', sourceId = 'animetosh
         downloads: intOrNull(r.downloads),
         pubDate,
         pageUrl,
-        trusted: false,
+        ...(pageUrl ? { toshoUrl: pageUrl } : {}),
+        ...(nyaaUrl ? { nyaaUrl } : {}),
+        ...(anidbEid ? { anidbEid } : {}),
+        ...(anidbAid ? { anidbAid } : {}),
+        ...(Number.isFinite(anidbEpisodeNumber) ? { anidbEpisodeNumber } : {}),
+        ...(r.is_batch != null ? { isBatch: !!r.is_batch } : {}),
+        ...(group ? { releaseGroup: group } : {}),
+        ...(resolution ? { videoResolution: resolution } : {}),
+        ...(fileNames ? { fileNames } : {}),
+        ...(listedFiles ? { listedFiles } : {}),
+        trusted: r.trusted === true,
         remake: false,
+        animetoshoListed: true,
         kind: 'torrent',
         ...(nzbUrl ? { nzbUrl } : {}),
         host,
         source: [host]
       })
     }
-    // Also surface AnimeTosho's keyless NZB when Usenet is enabled and the torrent has no/dead seeders (or is NZB-only).
-    if (enableUsenet && nzbUrl && (!infoHash || seeders === 0)) {
+    if (enableUsenet && nzbUrl) {
       out.push({
         title,
         link: nzbUrl,
+        guid: `nzb:${infoHash || r.id || nzbUrl}`,
         nzbUrl,
         infoHash: '',
         hash: '',
@@ -399,7 +509,7 @@ export function parseAnimeToshoJson (data, sourceUrl = '', sourceId = 'animetosh
         downloads: null,
         pubDate,
         pageUrl,
-        trusted: false,
+        trusted: r.trusted === true,
         remake: false,
         kind: 'nzb',
         host: 'animetosho',

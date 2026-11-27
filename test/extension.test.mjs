@@ -153,7 +153,7 @@ test('remote indexUrl mode: passes .list.json v2 directly through for Shiru loca
   }
 })
 
-test('remote sourcesUrl manifest: fetches SeaDex, AnimeTosho JSON, dmhy base32 magnet, Mikan hash, and filters hentai scope', async () => {
+test('remote sourcesUrl manifest: fetches SeaDex, AnimeTosho JSON/Torznab, Chinese-work dmhy/Mikan, and filters hentai scope', async () => {
   const hSeadex = HEX('1')
   const hTosho = HEX('2')
   // Base32 of 20 bytes of 0x33 ('3'.repeat(40)) => GMZTGMZTGMZTGMZTGMZTGMZTGMZTGMZT
@@ -185,6 +185,7 @@ test('remote sourcesUrl manifest: fetches SeaDex, AnimeTosho JSON, dmhy base32 m
     if (u.startsWith('https://seadex.example.test/')) {
       return new Response(JSON.stringify({
         items: [{
+          alID: 154587,
           expand: {
             trs: [{
               infoHash: hSeadex,
@@ -199,7 +200,7 @@ test('remote sourcesUrl manifest: fetches SeaDex, AnimeTosho JSON, dmhy base32 m
         }]
       }), { status: 200, headers: { 'content-type': 'application/json' } })
     }
-    if (u.startsWith('https://tosho.example.test/')) {
+    if (u.startsWith('https://tosho.example.test/json')) {
       return new Response(JSON.stringify([
         {
           title: '[SubsPlease] Sousou no Frieren - 01 (1080p) [11111111].mkv',
@@ -212,16 +213,20 @@ test('remote sourcesUrl manifest: fetches SeaDex, AnimeTosho JSON, dmhy base32 m
         }
       ]), { status: 200, headers: { 'content-type': 'application/json' } })
     }
+    if (u.startsWith('https://tosho.example.test/api')) {
+      return new Response('<rss><channel></channel></rss>', { status: 200, headers: { 'content-type': 'application/xml' } })
+    }
     if (u.startsWith('https://dmhy.example.test/')) {
-      return new Response(`<rss><channel><item><title>[LoliHouse] Sousou no Frieren - 01 [1080p][CHS].mkv</title><enclosure url="magnet:?xt=urn:btih:${hDmhyB32}" length="900000000" type="application/x-bittorrent" /></item></channel></rss>`, { status: 200, headers: { 'content-type': 'application/xml' } })
+      return new Response(`<rss><channel><item><title>[LoliHouse] Fanren Xiu Xian Zhuan - 01 [1080p][CHS].mkv</title><enclosure url="magnet:?xt=urn:btih:${hDmhyB32}" length="900000000" type="application/x-bittorrent" /></item></channel></rss>`, { status: 200, headers: { 'content-type': 'application/xml' } })
     }
     if (u.startsWith('https://mikan.example.test/')) {
-      return new Response(`<rss><channel><item><title>[ANi] Sousou no Frieren - 01 [1080p][CHT].mp4</title><link>https://mikanani.me/Home/Episode/${hMikan}</link></item></channel></rss>`, { status: 200, headers: { 'content-type': 'application/xml' } })
+      return new Response(`<rss><channel><item><title>[ANi] Fanren Xiu Xian Zhuan - 01 [1080p][CHT].mp4</title><link>https://mikan.example.test/Home/Episode/${hMikan}</link></item></channel></rss>`, { status: 200, headers: { 'content-type': 'application/xml' } })
     }
     return new Response('', { status: 404 })
   }
   try {
     ext.settings = { indexUrl: '', sourcesUrl: 'https://manifest.example.test/sources.json', feedUrls: '', useAnizip: false }
+    // 1. Japanese SFW show: SeaDex + AnimeTosho eid + MAL Torznab; Sukebei and Chinese-only hosts skipped
     const res = await ext.list({
       anilistId: 154587,
       episode: 1,
@@ -231,6 +236,7 @@ test('remote sourcesUrl manifest: fetches SeaDex, AnimeTosho JSON, dmhy base32 m
       titles: ['Sousou no Frieren'],
       media: {
         id: 154587,
+        idMal: 52991,
         episodes: 28,
         format: 'TV',
         status: 'FINISHED',
@@ -243,17 +249,133 @@ test('remote sourcesUrl manifest: fetches SeaDex, AnimeTosho JSON, dmhy base32 m
 
     assert.ok(!requested.some((u) => u.startsWith('https://sukebei.example.test/')), 'hentai-scoped source is skipped for SFW shows')
     assert.ok(requested.some((u) => u.includes('eid=283115')), 'expanded {anidbEid} for AnimeTosho')
-    assert.ok(requested.some((u) => u.startsWith('https://dmhy.example.test/')), 'queried dmhy with native CJK title')
-    assert.ok(requested.some((u) => u.startsWith('https://mikan.example.test/')), 'queried mikan with native CJK title')
+    assert.ok(requested.some((u) => u.includes('/api?t=tvsearch&malid=52991&ep=1')), 'queried AnimeTosho MAL-ID Torznab route')
+    assert.ok(!requested.some((u) => u.startsWith('https://dmhy.example.test/')), 'dmhy skipped for Japanese work per server parity rule')
 
     const allHashes = res.sections.raw.map((r) => r.hash)
     assert.ok(allHashes.includes(hSeadex), 'SeaDex best release surfaced')
     assert.ok(allHashes.includes(hTosho), 'AnimeTosho JSON release surfaced')
-    assert.ok(allHashes.includes(hDmhyHex), 'dmhy base32 BTIH decoded to hex')
-    assert.ok(allHashes.includes(hMikan), 'Mikan episode URL hash extracted')
     const sdRow = res.sections.raw.find((r) => r.hash === hSeadex)
     assert.equal(sdRow.seadexBest, true, 'SeaDex best flag preserved')
     assert.ok(sdRow.link.includes(encodeURIComponent('udp://tracker.example:1337/announce')), 'manifest trackers appended to magnet link')
+
+    // 2. Chinese work (Han without kana): dmhy (base32 BTIH) and Mikan (URL hash) fire via cascadeSearch
+    requested.length = 0
+    const resCn = await ext.list({
+      anilistId: 112323,
+      episode: 1,
+      episodeCount: 17,
+      resolution: '1080',
+      titles: ['Fanren Xiu Xian Zhuan'],
+      media: {
+        id: 112323,
+        episodes: 17,
+        format: 'ONA',
+        status: 'FINISHED',
+        genres: ['Action', 'Fantasy'],
+        title: { romaji: 'Fanren Xiu Xian Zhuan', english: "A Record of a Mortal's Journey to Immortality", native: '凡人修仙传', userPreferred: 'Fanren Xiu Xian Zhuan' },
+        synonyms: [],
+        relations: { edges: [] }
+      }
+    }, { fresh: true })
+
+    assert.ok(requested.some((u) => u.startsWith('https://dmhy.example.test/')), 'queried dmhy for Chinese work')
+    assert.ok(requested.some((u) => u.startsWith('https://mikan.example.test/')), 'queried mikan for Chinese work')
+    const cnHashes = resCn.sections.raw.map((r) => r.hash)
+    assert.ok(cnHashes.includes(hDmhyHex), 'dmhy base32 BTIH decoded to hex')
+    assert.ok(cnHashes.includes(hMikan), 'Mikan episode URL hash extracted')
+  } finally {
+    globalThis.fetch = origFetch
+  }
+})
+
+test('full cascadeSearch parity: 75-row saturated Nyaa HTML top-seeded escalation + Wave F fansub follow-up', async () => {
+  const hTop = HEX('f')
+  const hFansub = HEX('9')
+  const manifest = {
+    schemaVersion: 1,
+    indexUrl: '',
+    trackers: [],
+    sources: [
+      { id: 'nyaa-en', format: 'rss', scope: 'sfw', enabled: true, url: 'https://nyaa-parity.example.test/?page=rss&c=1_2&f=0&q={orQuery}' }
+    ]
+  }
+
+  // Generate 75 filler RSS items so cascadeSearch detects the 75-row RSS cap and triggers HTML s=seeders escalation.
+  const fillerItems = Array.from({ length: 75 }, (_, i) => {
+    const h = i.toString(16).padStart(40, '1')
+    return `<item><title>[Filler${i}] Sousou no Frieren - 99 (720p)</title><nyaa:infoHash>${h}</nyaa:infoHash><nyaa:seeders>1</nyaa:seeders><nyaa:size>300 MiB</nyaa:size><nyaa:categoryId>1_2</nyaa:categoryId></item>`
+  }).join('')
+  const saturatedRss = `<rss version="2.0" xmlns:nyaa="https://nyaa.si/xmlns/nyaa"><channel>${fillerItems}</channel></rss>`
+
+  const topHtml = `<html><head><title>Nyaa</title></head><body><table class="torrent-list"><tbody>
+    <tr class="success">
+      <td><a href="/?c=1_2">Anime</a></td>
+      <td><a href="/view/123456" title="[SubsPlease] Sousou no Frieren - 01 (1080p) [AAAA1111].mkv">[SubsPlease] Sousou no Frieren - 01 (1080p)</a></td>
+      <td><a href="magnet:?xt=urn:btih:${hTop}&amp;dn=test">m</a></td>
+      <td>1.4 GiB</td>
+      <td data-timestamp="1696000000">2023-09-29</td>
+      <td>250</td><td>5</td><td>9999</td>
+    </tr>
+  </tbody></table></body></html>`
+
+  const fansubRss = `<rss version="2.0" xmlns:nyaa="https://nyaa.si/xmlns/nyaa"><channel>
+    <item>
+      <title>[9volt] Sousou no Frieren - 01 (1080p) [BBBB2222].mkv</title>
+      <nyaa:infoHash>${hFansub}</nyaa:infoHash>
+      <nyaa:seeders>45</nyaa:seeders>
+      <nyaa:size>1.3 GiB</nyaa:size>
+      <nyaa:trusted>Yes</nyaa:trusted>
+      <nyaa:categoryId>1_2</nyaa:categoryId>
+    </item>
+  </channel></rss>`
+
+  const origFetch = globalThis.fetch
+  const requested = []
+  globalThis.fetch = async (url) => {
+    const u = String(url)
+    requested.push(u)
+    if (u.startsWith('https://parity-manifest.example.test/sources.json')) {
+      return new Response(JSON.stringify(manifest), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (u.startsWith('https://nyaa-parity.example.test/')) {
+      if (u.includes('s=seeders')) {
+        return new Response(topHtml, { status: 200, headers: { 'content-type': 'text/html' } })
+      }
+      if (decodeURIComponent(u).includes('9volt')) {
+        return new Response(fansubRss, { status: 200, headers: { 'content-type': 'application/xml' } })
+      }
+      return new Response(saturatedRss, { status: 200, headers: { 'content-type': 'application/xml' } })
+    }
+    return new Response('', { status: 404 })
+  }
+
+  try {
+    ext.settings = { indexUrl: '', sourcesUrl: 'https://parity-manifest.example.test/sources.json', feedUrls: '', useAnizip: false, enableUsenet: false }
+    const res = await ext.list({
+      anilistId: 154587,
+      episode: 1,
+      episodeCount: 28,
+      resolution: '1080',
+      titles: ['Sousou no Frieren'],
+      media: {
+        id: 154587,
+        idMal: 52991,
+        episodes: 28,
+        format: 'TV',
+        status: 'FINISHED',
+        genres: ['Adventure', 'Fantasy'],
+        title: { romaji: 'Sousou no Frieren', english: "Frieren: Beyond Journey's End", native: '葬送のフリーレン', userPreferred: 'Sousou no Frieren' },
+        synonyms: [],
+        relations: { edges: [] }
+      }
+    }, { fresh: true })
+
+    assert.ok(requested.some((u) => u.includes('s=seeders&o=desc')), '75-row saturated RSS triggered HTML top-seeded escalation')
+    assert.ok(requested.some((u) => decodeURIComponent(u).includes('9volt')), 'Wave F targeted fansub follow-up queried missing known fansub group')
+    const recHashes = res.sections.recommended.map((r) => r.hash)
+    assert.ok(recHashes.includes(hTop), 'HTML top-seeded escalation surfaced popular release missed by RSS cap')
+    assert.ok(recHashes.includes(hFansub), 'Wave F fansub follow-up surfaced known fansub group release')
   } finally {
     globalThis.fetch = origFetch
   }

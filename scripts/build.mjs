@@ -25,7 +25,8 @@ const workerShimsPlugin = {
     b.onResolve({ filter: /^(parse-torrent|bencode|uint8-util)$/ }, () => ({ path: path.join(SHIMS, 'noop.js') }))
 
     // `@/` alias -> synced vendor/matcher/common/ (with thin shims for renderer-only files)
-    b.onResolve({ filter: /^@\/modules\/bridge\.js$/ }, () => ({ path: path.join(SHIMS, 'noop.js') }))
+    b.onResolve({ filter: /^@\/modules\/bridge\.js$/ }, () => ({ path: path.join(SHIMS, 'bridge.js') }))
+    b.onResolve({ filter: /^@\/modules\/anime\/seadex\.js$/ }, () => ({ path: path.join(SHIMS, 'seadex.js') }))
     b.onResolve({ filter: /^@\/modules\/util\.js$/ }, () => ({ path: path.join(SHIMS, 'util.js') }))
     b.onResolve({ filter: /^@\/modules\/settings\.js$/ }, () => ({ path: path.join(SHIMS, 'seasonalSettings.js') }))
     b.onResolve({ filter: /^@\// }, (args) => {
