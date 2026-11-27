@@ -261,7 +261,17 @@ export async function importSeed ({
   return { skipped: false, ...meta }
 }
 
-function seedRowToRankRow (row, idx, winnerHash) {
+function appendTrackers (link, trackers = []) {
+  if (!link || !link.startsWith('magnet:') || !Array.isArray(trackers) || !trackers.length) return link
+  let out = link
+  for (const t of trackers) {
+    const enc = encodeURIComponent(t)
+    if (!out.includes(enc) && !out.includes(t)) out += `&tr=${enc}`
+  }
+  return out
+}
+
+function seedRowToRankRow (row, idx, winnerHash, trackers = []) {
   const hash = String(row?.btih || row?.hash || '').toLowerCase()
   const validHash = HEX40.test(hash) ? hash : ''
   const title = String(row?.name || row?.title || '')
@@ -269,7 +279,8 @@ function seedRowToRankRow (row, idx, winnerHash) {
   const isWinner = (winnerHash && validHash && validHash === winnerHash) || (!winnerHash && idx === 0 && kind !== 'nzb')
   const cardType = isWinner ? 'best' : 'default'
   const key = validHash ? `${kind}:${validHash}` : `${kind}:${title.toLowerCase().slice(0, 80)}`
-  const link = row?.link || (validHash ? `magnet:?xt=urn:btih:${validHash}&dn=${encodeURIComponent(title)}` : '')
+  const rawLink = row?.link || (validHash ? `magnet:?xt=urn:btih:${validHash}&dn=${encodeURIComponent(title)}` : '')
+  const link = appendTrackers(rawLink, trackers)
   const group = /^\[([^\]]+)\]/.exec(title)?.[1] || ''
   const seeders = Number.isSafeInteger(row?.seeders) ? row.seeders : null
   const downloads = Number.isSafeInteger(row?.downloads) ? row.downloads : null
@@ -370,11 +381,11 @@ export function openSeedStore (seedDir) {
     }
   }
 
-  function getRankPayload (anilistId, episode) {
+  function getRankPayload (anilistId, episode, { trackers = [] } = {}) {
     const rec = readRawRecord(anilistId, episode)
     if (!rec || !Array.isArray(rec.rows) || rec.rows.length === 0) return null
     const winnerHash = String(rec.answer?.pick?.winner?.hash || '').toLowerCase()
-    const mapped = rec.rows.map((r, i) => seedRowToRankRow(r, i, winnerHash))
+    const mapped = rec.rows.map((r, i) => seedRowToRankRow(r, i, winnerHash, trackers))
     const torrents = mapped.filter((r) => r.kind !== 'nzb')
     const usenet = mapped.filter((r) => r.kind === 'nzb')
     // Ensure winner/best leads recommended

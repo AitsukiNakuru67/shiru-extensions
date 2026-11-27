@@ -176,7 +176,7 @@ export default new class ReleaseMatcherExtension extends AbstractSource {
     }
     const useAnizip = this.settings?.useAnizip !== false
     const candidates = await fetchFeedCandidates(cfg.sources, query, { fresh, useAnizip })
-    return matchCandidatesLocally(query, candidates, { useAnizip, fresh })
+    return matchCandidatesLocally(query, candidates, { useAnizip, fresh, trackers: cfg.trackers })
   }
 
   async #flatQuery (query) {

@@ -63,6 +63,10 @@ const result = await build({
   format: 'esm',
   platform: 'browser',
   target: ['es2022'],
+  define: {
+    'process.env': '{}',
+    process: 'undefined'
+  },
   minifySyntax: true,
   minifyWhitespace: true,
   keepNames: true,

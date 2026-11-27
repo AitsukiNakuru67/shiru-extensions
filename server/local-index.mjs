@@ -95,10 +95,35 @@ export function createLocalIndexServer (opts = {}) {
   const sourcesUrl = /^(?:off|none|false|0)$/i.test(String(rawSourcesUrl || '').trim()) ? '' : String(rawSourcesUrl || '').trim()
   const hasSources = !!(feedUrls || sourcesUrl)
   const siteName = String(opts.siteName ?? process.env.SITE_NAME ?? 'Local Pre-Built Index').trim()
-  const trackers = String(opts.trackers ?? process.env.SITE_TRACKERS ?? '')
+  const staticTrackers = String(opts.trackers ?? process.env.SITE_TRACKERS ?? '')
     .split(/[\n,]+/)
     .map((s) => s.trim())
     .filter((s) => /^(?:udp|https?|wss?):\/\/[^\s]{3,240}$/i.test(s))
+  let manifestTrackers = []
+  let manifestTrackersAt = 0
+
+  async function refreshManifestTrackers () {
+    if (!sourcesUrl) return manifestTrackers
+    if (Date.now() - manifestTrackersAt < 15 * 60_000 && manifestTrackers.length) return manifestTrackers
+    try {
+      const res = await fetchImpl(sourcesUrl, { signal: AbortSignal.timeout(8000) })
+      if (res.ok) {
+        const body = await res.json()
+        if (Array.isArray(body?.trackers)) {
+          manifestTrackers = body.trackers
+            .map((s) => String(s || '').trim())
+            .filter((s) => /^(?:udp|https?|wss?):\/\/[^\s]{3,240}$/i.test(s))
+          manifestTrackersAt = Date.now()
+        }
+      }
+    } catch {}
+    return manifestTrackers
+  }
+
+  function effectiveTrackers () {
+    const seen = new Set(staticTrackers)
+    return [...staticTrackers, ...manifestTrackers.filter((t) => !seen.has(t))]
+  }
   const anilistUser = String(opts.anilistUser ?? process.env.ANILIST_USER ?? '').trim()
   const watchIds = String(opts.watchIds ?? process.env.WATCH_ANILIST_IDS ?? '')
     .split(/[\s,]+/)
@@ -163,7 +188,7 @@ export function createLocalIndexServer (opts = {}) {
       } catch {}
     }
     if (seedStore.ready) {
-      const payload = seedStore.getRankPayload(id, ep)
+      const payload = seedStore.getRankPayload(id, ep, { trackers: effectiveTrackers() })
       if (payload) {
         const wrapped = { ...payload, anilistId: id, episode: ep, builtAt: payload.seededAt || new Date().toISOString() }
         const json = JSON.stringify(wrapped)
@@ -437,6 +462,7 @@ export function createLocalIndexServer (opts = {}) {
       }
 
       if (req.method === 'GET' && parts.length === 1 && parts[0] === 'site.json') {
+        await refreshManifestTrackers()
         const origin = `http://${req.headers.host || `${host}:${port}`}`
         return sendJson(req, res, 200, {
           brand: { name: siteName, origin },
@@ -464,7 +490,7 @@ export function createLocalIndexServer (opts = {}) {
             health: '/health.json',
             episode: '/anime/anilist/{id}/{ep}.json'
           },
-          trackers,
+          trackers: effectiveTrackers(),
           copy: {}
         })
       }
@@ -537,6 +563,7 @@ export function createLocalIndexServer (opts = {}) {
       const addr = server.address()
       const boundPort = typeof addr === 'object' && addr ? addr.port : port
       log(`listening on http://${host}:${boundPort} (cache: ${dataDir}, seed: ${seedStore.count} eps, sources: ${hasSources ? (sourcesUrl || 'FEED_URLS') : 'not set'})`)
+      if (sourcesUrl) refreshManifestTrackers().catch(() => {})
       if (seedUrl && !seedStore.ready && !seedImporting) {
         seedImporting = true
         importSeed({ seedUrl, seedMetaUrl, seedDir, fetchImpl, log })

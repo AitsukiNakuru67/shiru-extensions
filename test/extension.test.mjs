@@ -253,6 +253,7 @@ test('remote sourcesUrl manifest: fetches SeaDex, AnimeTosho JSON, dmhy base32 m
     assert.ok(allHashes.includes(hMikan), 'Mikan episode URL hash extracted')
     const sdRow = res.sections.raw.find((r) => r.hash === hSeadex)
     assert.equal(sdRow.seadexBest, true, 'SeaDex best flag preserved')
+    assert.ok(sdRow.link.includes(encodeURIComponent('udp://tracker.example:1337/announce')), 'manifest trackers appended to magnet link')
   } finally {
     globalThis.fetch = origFetch
   }

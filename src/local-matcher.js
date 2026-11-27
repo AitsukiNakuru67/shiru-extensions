@@ -37,6 +37,17 @@ function toMediaObject (query) {
   }
 }
 
+function withTrackers (link, hash, title, trackers = []) {
+  const base = String(link || (HEX40.test(hash) ? `magnet:?xt=urn:btih:${hash}${title ? `&dn=${encodeURIComponent(title)}` : ''}` : ''))
+  if (!base || !base.startsWith('magnet:') || !Array.isArray(trackers) || !trackers.length) return base
+  let out = base
+  for (const t of trackers) {
+    const enc = encodeURIComponent(t)
+    if (!out.includes(enc) && !out.includes(t)) out += `&tr=${enc}`
+  }
+  return out
+}
+
 async function formatRankRow (r, ctx) {
   const hash = String(r.hash || r.infoHash || '').toLowerCase()
   const key = viewRowKey(r)
@@ -70,7 +81,7 @@ async function formatRankRow (r, ctx) {
     kind: r.kind === 'nzb' ? 'nzb' : 'torrent',
     title: String(r.title || ''),
     displayName: displayName || String(r.title || ''),
-    link: String(r.link || ''),
+    link: withTrackers(r.link, HEX40.test(hash) ? hash : '', String(r.title || ''), ctx.trackers),
     nzbUrl: String(r.nzbUrl || ''),
     pageUrl: String(r.pageUrl || facts.pageUrl || ''),
     host: String(r.host || ''),
@@ -109,9 +120,9 @@ async function formatRankRow (r, ctx) {
  *
  * @param {any} query Shiru `TorrentQuery`
  * @param {any[]} candidates Parsed candidate items from `feeds.js`
- * @param {{ useAnizip?: boolean, fresh?: boolean }} [opts]
+ * @param {{ useAnizip?: boolean, fresh?: boolean, trackers?: string[] }} [opts]
  */
-export async function matchCandidatesLocally (query, candidates, { useAnizip = true, fresh = false } = {}) {
+export async function matchCandidatesLocally (query, candidates, { useAnizip = true, fresh = false, trackers = [] } = {}) {
   const media = toMediaObject(query)
   const episode = Number(query?.episode) || 1
   const resolution = String(query?.resolution || DEFAULT_SEASONAL.resolution || '1080')
@@ -170,6 +181,7 @@ export async function matchCandidatesLocally (query, candidates, { useAnizip = t
     media,
     episode,
     engine,
+    trackers,
     scoreSettings: { ...settings, resolution, dualAudioBonus: true, healthOverSize: true }
   }
 

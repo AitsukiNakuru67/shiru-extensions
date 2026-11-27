@@ -145,6 +145,9 @@ test('seed importer & local-index: downloads .tar.zst, verifies SHA-256, indexes
     if (String(url).endsWith('/seed.tar.zst')) {
       return new Response(zstBuf, { status: 200, headers: { 'content-type': 'application/zstd' } })
     }
+    if (String(url).endsWith('/sources.json')) {
+      return new Response(JSON.stringify({ trackers: ['http://tracker.example.test:7777/announce'], sources: [] }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
     throw new Error('Unexpected network call: ' + url)
   }
 
@@ -175,13 +178,17 @@ test('seed importer & local-index: downloads .tar.zst, verifies SHA-256, indexes
     dataDir: path.join(tmp, 'cache'),
     seedDir,
     seedUrl: '',
-    sourcesUrl: '',
+    sourcesUrl: 'https://seed.example.test/sources.json',
     feedUrls: '',
     refreshMinutes: 0,
+    fetch: mockFetch,
     log: () => {}
   })
   const { port } = await app.start()
   try {
+    const site = await (await fetch(`http://127.0.0.1:${port}/site.json`)).json()
+    assert.ok(site.trackers.includes('http://tracker.example.test:7777/announce'), '/site.json forwards trackers from sources.json')
+
     const res = await fetch(`http://127.0.0.1:${port}/anime/anilist/1/1.rank.json`)
     assert.equal(res.status, 200)
     assert.equal(res.headers.get('x-local-cache'), 'seed')
@@ -190,6 +197,7 @@ test('seed importer & local-index: downloads .tar.zst, verifies SHA-256, indexes
     assert.equal(body.sections.recommended[0].hash, hWinner, 'winner from seed leads recommended')
     assert.equal(body.sections.recommended[0].cardType, 'best')
     assert.equal(body.sections.recommended[0].seadexBest, true)
+    assert.ok(body.sections.recommended[0].link.includes(encodeURIComponent('http://tracker.example.test:7777/announce')), 'seeded magnet link includes manifest trackers')
 
     const health = await (await fetch(`http://127.0.0.1:${port}/health.json`)).json()
     assert.equal(health.seedReady, true)
