@@ -2,7 +2,7 @@
   {
     "id": "release-index",
     "name": "Release Matcher",
-    "version": "0.4.1",
+    "version": "0.4.2",
     "main": "sources/release-index.js",
     "update": "gh:AitsukiNakuru67/shiru-extensions",
     "type": "torrent",
@@ -57,6 +57,6 @@
       }
     ],
     "description": "Runs Shiru's full episode matcher, query ladder, verifier, and ranker locally inside the extension worker from a remote Sources Manifest (SeaDex, AnimeTosho, Nyaa, Sukebei, dmhy, Mikan, Usenet crawlers + optional ameNZB) or connects to a pre-built Release Index URL.",
-    "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0Ij4KICA8ZGVmcz4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0iYmciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzFlMjkzYiIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiMwZjE3MmEiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImFjY2VudCIgeDE9IjAiIHkxPSIwIiB4Mj0iMSIgeTI9IjEiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjMzhiZGY4Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0iNTUlIiBzdG9wLWNvbG9yPSIjODE4Y2Y4Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iI2MwODRmYyIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICA8L2RlZnM+CiAgPHJlY3QgeD0iMiIgeT0iMiIgd2lkdGg9IjYwIiBoZWlnaHQ9IjYwIiByeD0iMTQiIGZpbGw9InVybCgjYmcpIiBzdHJva2U9InVybCgjYWNjZW50KSIgc3Ryb2tlLXdpZHRoPSIyLjUiLz4KICA8Y2lyY2xlIGN4PSIzMiIgY3k9IjMyIiByPSIxOSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ1cmwoI2FjY2VudCkiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLW9wYWNpdHk9IjAuMzUiLz4KICA8Y2lyY2xlIGN4PSIzMiIgY3k9IjMyIiByPSIxMi41IiBmaWxsPSJub25lIiBzdHJva2U9InVybCgjYWNjZW50KSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2Utb3BhY2l0eT0iMC42IiBzdHJva2UtZGFzaGFycmF5PSI2IDQiLz4KICA8cGF0aCBkPSJNMjcuNSAyMy41IEw0MiAzMiBMMjcuNSA0MC41IFoiIGZpbGw9InVybCgjYWNjZW50KSIvPgogIDxjaXJjbGUgY3g9IjQ3IiBjeT0iMTciIHI9IjQiIGZpbGw9IiMzOGJkZjgiLz4KPC9zdmc+Cg=="
+    "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0Ij4KICA8dGl0bGU+UmVsZWFzZSBNYXRjaGVyPC90aXRsZT4KICA8ZyBmaWxsPSJub25lIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPgogICAgPHBhdGggZD0iTTI1IDE0SDE0djQwaDExTTQzIDE0aDExdjQwSDQzIiBzdHJva2U9IiMwMDhjOGMiIHN0cm9rZS13aWR0aD0iOCIvPgogICAgPHBhdGggZD0iTTIxIDEwSDEwdjQwaDExTTM5IDEwaDExdjQwSDM5IiBzdHJva2U9IiMxYmQwZDYiIHN0cm9rZS13aWR0aD0iOCIvPgogICAgPHBhdGggZD0iTTI0IDI0aDEyTTI0IDM2aDEyIiBzdHJva2U9IiNlYmViZWIiIHN0cm9rZS13aWR0aD0iNi41Ii8+CiAgPC9nPgo8L3N2Zz4K"
   }
 ]
